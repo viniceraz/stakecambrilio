@@ -8,13 +8,6 @@ import { config } from "@/lib/wagmi";
 
 const queryClient = new QueryClient();
 
-const customLocale = {
-  connectWallet: {
-    label: "Connect Wallet",
-    labelConnecting: "Connecting...",
-  },
-};
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
@@ -33,12 +26,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <WagmiProvider config={config}>
           <QueryClientProvider client={queryClient}>
             <RainbowKitProvider
-              locale={customLocale as any}
               theme={darkTheme({
                 accentColor: "#c8ff00",
                 accentColorForeground: "#06060b",
                 borderRadius: "medium",
               })}
+              locale="en"
             >
               {children}
             </RainbowKitProvider>
