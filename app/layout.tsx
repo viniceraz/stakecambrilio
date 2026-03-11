@@ -14,6 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <title>Cambrilio Soft Stake</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" href="/logo.png" />
         <style>{`
           * { margin: 0; padding: 0; box-sizing: border-box; }
           body { background: #06060b; color: #f0f0f5; font-family: 'Inter', -apple-system, sans-serif; }
