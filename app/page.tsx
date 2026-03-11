@@ -20,7 +20,7 @@ const T = {
 interface LeaderEntry { wallet: string; staked: number; balance: number; earned: number; }
 interface StoreListing { id: number; title: string; description: string; image_url: string; project_url: string; price_cum: number; total_spots: number; remaining_spots: number; is_active: boolean; created_at: string; expires_at: string | null; }
 interface Purchase { id: number; listing_id: number; buyer_wallet: string; wl_wallet: string; cum_spent: number; purchased_at: string; store_listings?: { title: string }; }
-interface BurnReward { id: number; title: string; description: string; image_url: string; burn_cost: number; total_supply: number; remaining_supply: number; is_active: boolean; created_at: string; expires_at: string | null; }
+interface BurnReward { id: number; title: string; description: string; image_url: string; burn_cost: number; total_supply: number; remaining_supply: number; is_active: boolean; created_at: string; expires_at: string | null; starts_at: string | null; }
 interface BurnClaim { id: number; reward_id: number; wallet_address: string; token_ids: string[]; tx_hashes: string[]; status: string; admin_notes: string; submitted_at: string; burn_rewards?: { title: string; image_url: string }; }
 
 // ═══ HELPERS ═══
@@ -29,7 +29,7 @@ const inputStyle: React.CSSProperties = { width: "100%", background: T.card, bor
 const shortAddr = (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 
 // ═══ COUNTDOWN COMPONENT ═══
-function Countdown({ expiresAt }: { expiresAt: string }) {
+function Countdown({ expiresAt, label }: { expiresAt: string; label?: string }) {
   const [left, setLeft] = useState("");
   const [expired, setExpired] = useState(false);
   useEffect(() => {
@@ -49,7 +49,36 @@ function Countdown({ expiresAt }: { expiresAt: string }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", background: expired ? `${T.burn}15` : `${T.accent}10`, border: `1px solid ${expired ? T.burn : T.accent}30`, borderRadius: 8 }}>
       <span style={{ fontSize: 14 }}>{expired ? "⏰" : "⏳"}</span>
+      {label && <span style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1 }}>{label}</span>}
       <span style={{ fontSize: 11, fontWeight: 800, fontFamily: "monospace", color: expired ? T.burn : T.accent, letterSpacing: 1 }}>{left}</span>
+    </div>
+  );
+}
+
+// Starts-at countdown: shows countdown + "LOCKED" until start time, then returns null
+function StartsInCountdown({ startsAt }: { startsAt: string }) {
+  const [left, setLeft] = useState("");
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    const update = () => {
+      const diff = new Date(startsAt).getTime() - Date.now();
+      if (diff <= 0) { setStarted(true); return; }
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      setLeft(`${d > 0 ? d + "d " : ""}${h.toString().padStart(2, "0")}h ${m.toString().padStart(2, "0")}m ${s.toString().padStart(2, "0")}s`);
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [startsAt]);
+  if (started) return null;
+  return (
+    <div style={{ padding: "14px 16px", background: `${T.gold}08`, border: `1px solid ${T.gold}30`, borderRadius: 10, textAlign: "center" }}>
+      <div style={{ fontSize: 9, fontFamily: "monospace", color: T.gold, letterSpacing: 2, fontWeight: 700, marginBottom: 6 }}>🔒 OPENS IN</div>
+      <div style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: T.gold, letterSpacing: 2, textShadow: `0 0 20px ${T.gold}33` }}>{left}</div>
+      <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginTop: 6, letterSpacing: 1 }}>BURN WILL BE AVAILABLE WHEN COUNTDOWN ENDS</div>
     </div>
   );
 }
@@ -103,7 +132,7 @@ export default function StakePage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminData, setAdminData] = useState<any>(null);
   const [newListing, setNewListing] = useState({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", expiresAt: "" });
-  const [newBurnReward, setNewBurnReward] = useState({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "" });
+  const [newBurnReward, setNewBurnReward] = useState({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" });
 
   // ═══ SHOW MESSAGE ═══
   const showMsg = (text: string, type: "ok" | "err" = "ok") => { setMsg(text); setMsgType(type); setTimeout(() => setMsg(""), 6000); };
@@ -208,7 +237,7 @@ export default function StakePage() {
 
   const handleCreateBurnReward = async () => {
     if (!address) return;
-    try { const res = await fetch("/api/burn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create_reward", wallet: address, ...newBurnReward, expiresAt: newBurnReward.expiresAt || null }) }); const data = await res.json(); if (data.success) { showMsg(`Burn reward created!`); setNewBurnReward({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "" }); await loadBurnData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); }
+    try { const res = await fetch("/api/burn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create_reward", wallet: address, ...newBurnReward, expiresAt: newBurnReward.expiresAt || null, startsAt: newBurnReward.startsAt || null }) }); const data = await res.json(); if (data.success) { showMsg(`Burn reward created!`); setNewBurnReward({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" }); await loadBurnData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); }
   };
 
   const toggleStakeEnabled = async () => {
@@ -442,20 +471,25 @@ export default function StakePage() {
                   const txInputs = burnTxInputs[reward.id] || [""];
                   const isSoldOut = reward.remaining_supply <= 0;
                   const isClaimed = !!myClaim;
+                  const notStarted = reward.starts_at ? new Date(reward.starts_at).getTime() > Date.now() : false;
                   return (
                     <div key={reward.id} style={{ background: T.card, border: `1px solid ${isClaimed ? T.success + "40" : T.border}`, borderRadius: 14, overflow: "hidden" }}>
-                      {reward.image_url && <img src={reward.image_url} alt={reward.title} style={{ width: "100%", height: 180, objectFit: "cover" }} />}
+                      {reward.image_url && <img src={reward.image_url} alt={reward.title} style={{ width: "100%", height: 180, objectFit: "cover", filter: notStarted ? "brightness(0.5) grayscale(0.3)" : "none" }} />}
                       <div style={{ padding: 16 }}>
                         <h3 style={{ fontSize: 15, fontWeight: 900, fontFamily: "monospace", color: T.white, marginBottom: 6 }}>{reward.title}</h3>
                         {reward.description && <p style={{ fontSize: 10, color: T.gray, lineHeight: 1.6, marginBottom: 10 }}>{reward.description}</p>}
-                        {reward.expires_at && <div style={{ marginBottom: 10 }}><Countdown expiresAt={reward.expires_at} /></div>}
+                        {reward.starts_at && notStarted && <div style={{ marginBottom: 10 }}><StartsInCountdown startsAt={reward.starts_at} /></div>}
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                          {reward.expires_at && <Countdown expiresAt={reward.expires_at} label="ENDS IN" />}
+                          {reward.starts_at && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
+                        </div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                           <div><div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>BURN COST</div><div style={{ fontSize: 20, fontWeight: 900, fontFamily: "monospace", color: T.burn }}>{reward.burn_cost} <span style={{ fontSize: 10, opacity: 0.7 }}>NFTs</span></div></div>
                           <div style={{ textAlign: "right" }}><div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>AVAILABLE</div><div style={{ fontSize: 14, fontWeight: 900, fontFamily: "monospace", color: reward.remaining_supply <= 1 ? T.burn : T.accent }}>{reward.remaining_supply}/{reward.total_supply}</div></div>
                         </div>
                         <div style={{ height: 3, background: T.grayK, borderRadius: 2, marginBottom: 14, overflow: "hidden" }}><div style={{ height: "100%", width: `${((reward.total_supply - reward.remaining_supply) / reward.total_supply) * 100}%`, background: reward.remaining_supply <= 1 ? T.burn : T.accent, borderRadius: 2 }} /></div>
                         {isClaimed && <div style={{ padding: "8px 12px", borderRadius: 8, marginBottom: 10, background: myClaim.status === "delivered" ? `${T.success}15` : `${T.sweep}15`, border: `1px solid ${myClaim.status === "delivered" ? T.success : T.sweep}30` }}><div style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: myClaim.status === "delivered" ? T.success : T.sweep }}>{myClaim.status === "delivered" ? "✅ DELIVERED" : "⏳ AWAITING DELIVERY"}</div><div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginTop: 3 }}>Burned: {myClaim.token_ids.map(id => `#${id}`).join(", ")}</div></div>}
-                        {!isClaimed && !isSoldOut && isConnected && (
+                        {!isClaimed && !isSoldOut && isConnected && !notStarted && (
                           isActive ? (
                             <div>
                               <div style={{ fontSize: 9, fontFamily: "monospace", color: T.gray, marginBottom: 8, padding: "6px 8px", background: T.bgS, borderRadius: 6, border: `1px solid ${T.border}`, lineHeight: 1.7 }}>1. Transfer {reward.burn_cost} NFTs to <span style={{ color: T.burn }}>0x...dEaD</span><br />2. Paste TX hash(es) below (bulk OK)</div>
@@ -475,7 +509,7 @@ export default function StakePage() {
                             <button onClick={() => { setActiveBurnId(reward.id); setBurnTxInputs(p => ({ ...p, [reward.id]: p[reward.id] || [""] })); }} style={{ width: "100%", background: `${T.burn}15`, border: `1px solid ${T.burn}40`, borderRadius: 8, padding: "10px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.burn, cursor: "pointer", letterSpacing: 1 }}>🔥 BURN {reward.burn_cost} NFTs TO CLAIM</button>
                           )
                         )}
-                        {!isConnected && !isSoldOut && !isClaimed && <div style={{ textAlign: "center", padding: 8, fontSize: 10, fontFamily: "monospace", color: T.grayD }}>Connect wallet to claim</div>}
+                        {!isConnected && !isSoldOut && !isClaimed && !notStarted && <div style={{ textAlign: "center", padding: 8, fontSize: 10, fontFamily: "monospace", color: T.grayD }}>Connect wallet to claim</div>}
                       </div>
                     </div>
                   );
@@ -557,6 +591,7 @@ export default function StakePage() {
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>TITLE *</label><input value={newBurnReward.title} onChange={e => setNewBurnReward(p => ({ ...p, title: e.target.value }))} style={inputStyle} placeholder="White Party Hat 1/1" /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>IMAGE URL</label><input value={newBurnReward.imageUrl} onChange={e => setNewBurnReward(p => ({ ...p, imageUrl: e.target.value }))} style={inputStyle} /></div>
                 <div style={{ gridColumn: "1 / -1" }}><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>DESCRIPTION</label><input value={newBurnReward.description} onChange={e => setNewBurnReward(p => ({ ...p, description: e.target.value }))} style={inputStyle} /></div>
+                <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>STARTS AT (countdown to open)</label><input type="datetime-local" value={newBurnReward.startsAt} onChange={e => setNewBurnReward(p => ({ ...p, startsAt: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>EXPIRES AT</label><input type="datetime-local" value={newBurnReward.expiresAt} onChange={e => setNewBurnReward(p => ({ ...p, expiresAt: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>BURN COST (NFTs) *</label><input type="number" value={newBurnReward.burnCost} onChange={e => setNewBurnReward(p => ({ ...p, burnCost: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>SUPPLY *</label><input type="number" value={newBurnReward.totalSupply} onChange={e => setNewBurnReward(p => ({ ...p, totalSupply: e.target.value }))} style={inputStyle} /></div>

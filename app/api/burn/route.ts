@@ -147,6 +147,8 @@ export async function POST(req: NextRequest) {
           burn_cost: parseInt(body.burnCost),
           total_supply: parseInt(body.totalSupply),
           remaining_supply: parseInt(body.totalSupply),
+          expires_at: body.expiresAt || null,
+          starts_at: body.startsAt || null,
         })
         .select()
         .single();
@@ -178,6 +180,16 @@ export async function POST(req: NextRequest) {
 
     if (reward.remaining_supply <= 0) {
       return NextResponse.json({ error: "No more rewards available" }, { status: 400 });
+    }
+
+    // Check if burn has started yet
+    if (reward.starts_at && new Date(reward.starts_at).getTime() > Date.now()) {
+      return NextResponse.json({ error: "This burn reward has not opened yet" }, { status: 400 });
+    }
+
+    // Check if burn has expired
+    if (reward.expires_at && new Date(reward.expires_at).getTime() <= Date.now()) {
+      return NextResponse.json({ error: "This burn reward has expired" }, { status: 400 });
     }
 
     // Check if wallet already claimed this reward
