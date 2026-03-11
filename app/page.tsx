@@ -266,7 +266,7 @@ export default function StakePage() {
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: `${T.bg}ee`, backdropFilter: "blur(12px)", borderBottom: `1px solid ${T.border}`, padding: "0 16px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 20 }}>🔥</span>
+            <img src="/logo.png" alt="Logo" style={{ height: 20, width: 'auto' }} />
             <span style={{ fontSize: 16, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: T.accent }}>CAMBRILIO</span>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", overflowX: "auto", flexShrink: 1 }}>
