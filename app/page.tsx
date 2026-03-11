@@ -289,7 +289,7 @@ export default function StakePage() {
           <>
             {!isConnected ? (
               <div style={{ textAlign: "center", padding: "60px 16px" }}>
-                <div style={{ fontSize: 48, marginBottom: 16 }}>🔥</div>
+                <img src="/logo2.png" alt="Logo" style={{ height: 64, width: 'auto', marginBottom: 16 }} />
                 <h1 style={{ fontSize: 28, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, marginBottom: 10, color: T.accent }}>SOFT STAKE</h1>
                 <p style={{ fontSize: 13, color: T.gray, maxWidth: 420, margin: "0 auto 14px", lineHeight: 1.8 }}>Stake your Cambrilios without leaving your wallet. Earn <span style={{ color: T.cum, fontWeight: 700 }}>$CUM tickets</span> every 24 hours.</p>
                 <p style={{ fontSize: 11, color: T.grayD, fontFamily: "monospace", marginBottom: 24 }}>1 staked NFT = 1 $CUM / day</p>
@@ -474,7 +474,7 @@ export default function StakePage() {
                   const notStarted = reward.starts_at ? new Date(reward.starts_at).getTime() > Date.now() : false;
                   return (
                     <div key={reward.id} style={{ background: T.card, border: `1px solid ${isClaimed ? T.success + "40" : T.border}`, borderRadius: 14, overflow: "hidden" }}>
-                      {reward.image_url && <img src={reward.image_url} alt={reward.title} style={{ width: "100%", height: 180, objectFit: "cover", filter: notStarted ? "brightness(0.5) grayscale(0.3)" : "none" }} />}
+                      {reward.image_url && <img src={reward.image_url} alt={reward.title} style={{ width: "100%", height: "auto", maxHeight: 1000, objectFit: "contain" }} />}
                       <div style={{ padding: 16 }}>
                         <h3 style={{ fontSize: 15, fontWeight: 900, fontFamily: "monospace", color: T.white, marginBottom: 6 }}>{reward.title}</h3>
                         {reward.description && <p style={{ fontSize: 10, color: T.gray, lineHeight: 1.6, marginBottom: 10 }}>{reward.description}</p>}
