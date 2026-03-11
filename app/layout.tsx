@@ -17,7 +17,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="icon" href="/logo.png" />
         <style>{`
           * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { background: #06060b; color: #f0f0f5; font-family: 'Inter', -apple-system, sans-serif; }
+          body {
+            background: #06060b;
+            background-image: url('/backgroundsss.jpg');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            background-repeat: no-repeat;
+            color: #f0f0f5;
+            font-family: 'Inter', -apple-system, sans-serif;
+          }
           ::-webkit-scrollbar { width: 6px; }
           ::-webkit-scrollbar-track { background: #0b0b14; }
           ::-webkit-scrollbar-thumb { background: #333345; border-radius: 3px; }

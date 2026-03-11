@@ -261,7 +261,7 @@ export default function StakePage() {
 
   // ═══ RENDER ═══
   return (
-    <div style={{ minHeight: "100vh", background: T.bg, color: T.white, fontFamily: "'Inter', -apple-system, sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: `${T.bg}cc`, color: T.white, fontFamily: "'Inter', -apple-system, sans-serif" }}>
       {/* NAV */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: `${T.bg}ee`, backdropFilter: "blur(12px)", borderBottom: `1px solid ${T.border}`, padding: "0 16px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, gap: 8 }}>
