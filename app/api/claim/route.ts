@@ -3,6 +3,7 @@ import { getServiceSupabase } from "@/lib/supabase";
 
 // Rate: 1 staked NFT = 1 $CUM per 24 hours
 const CUM_PER_NFT_PER_HOUR = 1 / 24;
+const MIN_HOURS_BETWEEN_CLAIMS = 24; // Must wait 24h between claims
 
 export async function POST(req: NextRequest) {
   try {
@@ -31,33 +32,26 @@ export async function POST(req: NextRequest) {
     const now = new Date();
     const hoursElapsed = (now.getTime() - lastClaim.getTime()) / (1000 * 60 * 60);
 
-    if (hoursElapsed < 1) {
+    // Must wait at least 24 hours between claims
+    if (hoursElapsed < MIN_HOURS_BETWEEN_CLAIMS) {
+      const hoursLeft = Math.ceil(MIN_HOURS_BETWEEN_CLAIMS - hoursElapsed);
+      const minsLeft = Math.ceil((MIN_HOURS_BETWEEN_CLAIMS - hoursElapsed) * 60);
       return NextResponse.json({
-        error: "Too early to claim. Minimum 1 hour between claims.",
-        nextClaimIn: Math.ceil(60 - (hoursElapsed * 60)),
+        error: `Next claim available in ~${hoursLeft > 1 ? hoursLeft + "h" : minsLeft + "min"}. Claims are every 24 hours.`,
+        nextClaimIn: minsLeft,
       }, { status: 400 });
     }
 
     // Calculate $CUM earned
-    const earned = Math.floor(staker.total_staked * hoursElapsed * CUM_PER_NFT_PER_HOUR * 100) / 100;
+    const earned = Math.floor(staker.total_staked * hoursElapsed * CUM_PER_NFT_PER_HOUR);
 
-    if (earned < 0.01) {
+    if (earned < 1) {
       return NextResponse.json({ error: "Not enough $CUM accumulated yet" }, { status: 400 });
     }
 
-    // Round down to integer for clean numbers
-    const earnedInt = Math.floor(earned);
-    if (earnedInt < 1) {
-      const hoursNeeded = Math.ceil(24 / staker.total_staked);
-      return NextResponse.json({
-        error: `Need more time. With ${staker.total_staked} NFTs staked, claim every ${hoursNeeded}h+`,
-        accumulated: earned.toFixed(2),
-      }, { status: 400 });
-    }
-
     // Update balance
-    const newBalance = (parseFloat(staker.cum_balance) || 0) + earnedInt;
-    const newTotalEarned = (parseFloat(staker.cum_total_earned) || 0) + earnedInt;
+    const newBalance = (parseFloat(staker.cum_balance) || 0) + earned;
+    const newTotalEarned = (parseFloat(staker.cum_total_earned) || 0) + earned;
 
     await sb.from("stakers").update({
       cum_balance: newBalance,
@@ -68,14 +62,14 @@ export async function POST(req: NextRequest) {
     // Log the claim
     await sb.from("cum_claims").insert({
       wallet_address: w,
-      amount: earnedInt,
+      amount: earned,
       staked_count: staker.total_staked,
       hours_elapsed: Math.floor(hoursElapsed),
     });
 
     return NextResponse.json({
       success: true,
-      claimed: earnedInt,
+      claimed: earned,
       balance: newBalance,
       totalEarned: newTotalEarned,
       stakedCount: staker.total_staked,

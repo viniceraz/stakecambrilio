@@ -110,6 +110,9 @@ export default function StakePage() {
   const [cumRate, setCumRate] = useState(0);
   const [claiming, setClaiming] = useState(false);
   const [myPurchases, setMyPurchases] = useState<Purchase[]>([]);
+  const [transferWallet, setTransferWallet] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
+  const [transferring, setTransferring] = useState(false);
 
   // Store
   const [listings, setListings] = useState<StoreListing[]>([]);
@@ -133,6 +136,9 @@ export default function StakePage() {
   const [adminData, setAdminData] = useState<any>(null);
   const [newListing, setNewListing] = useState({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", expiresAt: "" });
   const [newBurnReward, setNewBurnReward] = useState({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" });
+
+  // Mobile menu
+  const [mobileMenu, setMobileMenu] = useState(false);
 
   // ═══ SHOW MESSAGE ═══
   const showMsg = (text: string, type: "ok" | "err" = "ok") => { setMsg(text); setMsgType(type); setTimeout(() => setMsg(""), 6000); };
@@ -195,6 +201,23 @@ export default function StakePage() {
   const handleClaim = async () => {
     if (!address) return; setClaiming(true);
     try { const res = await fetch("/api/claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address }) }); const data = await res.json(); if (data.success) { showMsg(`Claimed ${data.claimed} $CUM! Balance: ${data.balance}`); await loadUserData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); } finally { setClaiming(false); }
+  };
+
+  const handleTransferCum = async () => {
+    if (!address || !transferWallet || !transferAmount) return;
+    const amt = parseInt(transferAmount);
+    if (isNaN(amt) || amt <= 0) { showMsg("Enter a valid amount", "err"); return; }
+    if (amt > cumBalance) { showMsg(`Not enough $CUM. You have ${cumBalance}`, "err"); return; }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(transferWallet)) { showMsg("Invalid wallet address", "err"); return; }
+    if (transferWallet.toLowerCase() === address.toLowerCase()) { showMsg("Cannot send to yourself", "err"); return; }
+    setTransferring(true);
+    try {
+      const res = await fetch("/api/transfer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from: address, to: transferWallet, amount: amt }) });
+      const data = await res.json();
+      if (data.success) { showMsg(`Sent ${amt} $CUM to ${shortAddr(transferWallet)}`); setTransferWallet(""); setTransferAmount(""); await loadUserData(); }
+      else showMsg(data.error, "err");
+    } catch (err: any) { showMsg(err.message, "err"); }
+    finally { setTransferring(false); }
   };
 
   // ═══ STORE HANDLERS ═══
@@ -269,17 +292,38 @@ export default function StakePage() {
             <img src="/logo.png" alt="Logo" style={{ height: 20, width: 'auto' }} />
             <span style={{ fontSize: 16, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: T.accent }}>CAMBRILIO</span>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", overflowX: "auto", flexShrink: 1 }}>
+          {/* Desktop tabs */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 1 }}>
             {(["stake", "store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
-              <button key={t} onClick={() => setTab(t as any)} style={{ background: "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 10, fontWeight: 800, fontFamily: "monospace", letterSpacing: 1.5, borderBottom: tab === t ? `2px solid ${T.accent}` : "2px solid transparent", padding: "6px 2px", whiteSpace: "nowrap", flexShrink: 0 }}>▸{t.toUpperCase()}</button>
+              <button key={t} onClick={() => { setTab(t as any); setMobileMenu(false); }} className="nav-tab-desktop" style={{ background: "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 10, fontWeight: 800, fontFamily: "monospace", letterSpacing: 1.5, borderBottom: tab === t ? `2px solid ${T.accent}` : "2px solid transparent", padding: "6px 2px", whiteSpace: "nowrap", flexShrink: 0 }}>▸{t.toUpperCase()}</button>
             ))}
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
             {isConnected && <div style={{ padding: "3px 8px", background: `${T.cum}15`, border: `1px solid ${T.cum}30`, borderRadius: 6 }}><span style={{ fontSize: 11, fontWeight: 900, fontFamily: "monospace", color: T.cum }}>{cumBalance}</span><span style={{ fontSize: 8, color: T.cum, opacity: 0.7, marginLeft: 3 }}>$CUM</span></div>}
             <ConnectButton showBalance={false} chainStatus="icon" accountStatus="address" label="Connect Wallet" />
+            {/* Hamburger for mobile */}
+            <button className="nav-hamburger" onClick={() => setMobileMenu(p => !p)} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 8px", cursor: "pointer", color: T.white, fontSize: 16, lineHeight: 1 }}>{mobileMenu ? "✕" : "☰"}</button>
           </div>
         </div>
+        {/* Mobile dropdown */}
+        {mobileMenu && (
+          <div className="nav-mobile-menu" style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 0 12px", borderTop: `1px solid ${T.border}` }}>
+            {(["stake", "store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
+              <button key={t} onClick={() => { setTab(t as any); setMobileMenu(false); }} style={{ background: tab === t ? `${T.accent}10` : "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 12, fontWeight: 800, fontFamily: "monospace", letterSpacing: 2, padding: "10px 16px", textAlign: "left", borderRadius: 6, borderLeft: tab === t ? `3px solid ${T.accent}` : "3px solid transparent" }}>▸ {t.toUpperCase()}</button>
+            ))}
+          </div>
+        )}
       </nav>
+      <style>{`
+        @media (max-width: 640px) {
+          .nav-tab-desktop { display: none !important; }
+          .nav-hamburger { display: flex !important; }
+        }
+        @media (min-width: 641px) {
+          .nav-hamburger { display: none !important; }
+          .nav-mobile-menu { display: none !important; }
+        }
+      `}</style>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 16px 60px" }}>
         {msg && <div style={{ padding: "10px 14px", marginBottom: 16, borderRadius: 8, background: msgType === "err" ? `${T.burn}15` : `${T.success}15`, border: `1px solid ${msgType === "err" ? T.burn : T.success}30`, color: msgType === "err" ? T.burn : T.success, fontSize: 12, fontFamily: "monospace" }}>{msg}</div>}
@@ -293,7 +337,6 @@ export default function StakePage() {
                 <h1 style={{ fontSize: 28, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, marginBottom: 10, color: T.accent }}>SOFT STAKE</h1>
                 <p style={{ fontSize: 13, color: T.gray, maxWidth: 420, margin: "0 auto 14px", lineHeight: 1.8 }}>Stake your Cambrilios without leaving your wallet. Earn <span style={{ color: T.cum, fontWeight: 700 }}>$CUM tickets</span> every 24 hours.</p>
                 <p style={{ fontSize: 11, color: T.grayD, fontFamily: "monospace", marginBottom: 24 }}>1 staked NFT = 1 $CUM / day</p>
-                <ConnectButton label="Connect Wallet" />
               </div>
             ) : loading ? (
               <div style={{ textAlign: "center", padding: 60, fontSize: 11, fontFamily: "monospace", color: T.grayD }}>⏳ Loading your Cambrilios...</div>
@@ -315,7 +358,23 @@ export default function StakePage() {
                     </div>
                     <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 4 }}>Rate: {cumRate}/day • Pending: ~{cumPending} • Earned: {cumEarned} • Spent: {cumSpent}</div>
                   </div>
-                  <button onClick={handleClaim} disabled={claiming || cumPending < 1} style={{ background: cumPending >= 1 ? T.cum : T.grayK, color: T.bg, border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: cumPending >= 1 ? "pointer" : "not-allowed", opacity: claiming ? 0.6 : 1 }}>{claiming ? "CLAIMING..." : cumPending >= 1 ? `CLAIM ${cumPending} $CUM` : "ACCUMULATING..."}</button>
+                  <button onClick={handleClaim} disabled={claiming || cumPending < 1} style={{ background: cumPending >= 1 ? T.cum : T.grayK, color: T.bg, border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: cumPending >= 1 ? "pointer" : "not-allowed", opacity: claiming ? 0.6 : 1 }}>{claiming ? "CLAIMING..." : cumPending >= 1 ? `CLAIM ${cumPending} $CUM` : "ACCUMULATING (24h cycle)"}</button>
+                </div>
+
+                {/* Send $CUM to another wallet */}
+                <div style={{ ...PS, padding: 16 }}>
+                  <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD, letterSpacing: 2, fontWeight: 700, marginBottom: 10 }}>SEND $CUM TO ANOTHER WALLET</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                    <div style={{ flex: "1 1 200px" }}>
+                      <label style={{ fontSize: 8, fontFamily: "monospace", color: T.grayK }}>RECIPIENT WALLET</label>
+                      <input type="text" placeholder="0x..." value={transferWallet} onChange={e => setTransferWallet(e.target.value)} style={{ ...inputStyle, marginTop: 2 }} />
+                    </div>
+                    <div style={{ flex: "0 0 100px" }}>
+                      <label style={{ fontSize: 8, fontFamily: "monospace", color: T.grayK }}>AMOUNT</label>
+                      <input type="number" placeholder="0" value={transferAmount} onChange={e => setTransferAmount(e.target.value)} style={{ ...inputStyle, marginTop: 2 }} />
+                    </div>
+                    <button onClick={handleTransferCum} disabled={transferring || !transferWallet || !transferAmount} style={{ background: cumBalance > 0 && transferWallet && transferAmount ? T.cum : T.grayK, color: T.bg, border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 10, fontWeight: 900, fontFamily: "monospace", cursor: cumBalance > 0 ? "pointer" : "not-allowed", opacity: transferring ? 0.6 : 1, whiteSpace: "nowrap" }}>{transferring ? "SENDING..." : "SEND $CUM"}</button>
+                  </div>
                 </div>
 
                 {/* Stake disabled notice */}
@@ -406,7 +465,7 @@ export default function StakePage() {
         {tab === "store" && (
           <>
             <h2 style={{ fontSize: 20, fontWeight: 900, fontFamily: "monospace", letterSpacing: 2, color: T.white, marginBottom: 6 }}>$CUM STORE</h2>
-            <p style={{ fontSize: 11, fontFamily: "monospace", color: T.grayD, marginBottom: 20 }}>Spend your $CUM tickets on WL spots.</p>
+            <p style={{ fontSize: 11, fontFamily: "monospace", color: T.grayD, marginBottom: 20 }}>Spend your $CUM tickets on WL spots, airdrops, itens in game, cambrilios....</p>
             {isConnected && <div style={{ ...PS, display: "flex", gap: 16, alignItems: "center" }}><span style={{ fontSize: 22, fontWeight: 900, fontFamily: "monospace", color: T.cum }}>{cumBalance}</span><span style={{ fontSize: 10, color: T.cum, opacity: 0.6 }}>$CUM available</span></div>}
             {listings.length === 0 ? (
               <div style={{ textAlign: "center", padding: 60 }}><div style={{ fontSize: 36 }}>🔮</div><div style={{ fontSize: 16, fontWeight: 900, fontFamily: "monospace", color: T.accent, letterSpacing: 2, marginTop: 10 }}>SOONBRIA!</div><div style={{ fontSize: 10, color: T.grayD, fontFamily: "monospace", marginTop: 6 }}>No listings yet.</div></div>
@@ -481,7 +540,8 @@ export default function StakePage() {
                         {reward.starts_at && notStarted && <div style={{ marginBottom: 10 }}><StartsInCountdown startsAt={reward.starts_at} /></div>}
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                           {reward.expires_at && <Countdown expiresAt={reward.expires_at} label="ENDS IN" />}
-                          {reward.starts_at && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
+                          {isSoldOut && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.burn}10`, border: `1px solid ${T.burn}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🔴</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.burn, letterSpacing: 1 }}>ENDED</span></div>}
+                          {!isSoldOut && reward.starts_at && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                           <div><div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>BURN COST</div><div style={{ fontSize: 20, fontWeight: 900, fontFamily: "monospace", color: T.burn }}>{reward.burn_cost} <span style={{ fontSize: 10, opacity: 0.7 }}>NFTs</span></div></div>
