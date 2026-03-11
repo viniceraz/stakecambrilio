@@ -48,7 +48,7 @@ export default function StakePage() {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
 
-  const [tab, setTab] = useState<"store" | "burn" | "dashboard" | "admin">("store");
+  const [tab, setTab] = useState<"stake" | "store" | "burn" | "dashboard" | "admin">("stake");
   const [ownedNfts, setOwnedNfts] = useState<OwnedNFT[]>([]);
   const [listedIds, setListedIds] = useState<Set<string>>(new Set());
   const [stakedIds, setStakedIds] = useState<Set<string>>(new Set());
@@ -179,7 +179,7 @@ export default function StakePage() {
     try {
       const ids = Array.from(selectedIds);
       const message = `I confirm soft staking ${ids.length} Cambrilio NFT(s): ${ids.join(", ")}\nWallet: ${address}\nTimestamp: ${new Date().toISOString()}`;
-      const signature = await signMessageAsync({ message });
+      const signature = await signMessageAsync({ account: address, message });
       const res = await fetch("/api/stake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, tokenIds: ids, signature }) });
       const data = await res.json();
       if (data.success) { showMsg(`Staked ${data.staked} NFT(s)! Total: ${data.total}`); setSelectedIds(new Set()); await loadUserData(); await loadLeaderboard(); }
@@ -372,7 +372,7 @@ export default function StakePage() {
             <span style={{ fontSize: 18, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: T.accent }}>CAMBRILIO</span>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            {["store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])].map(t => (
+            {["stake", "store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])].map(t => (
               <button key={t} onClick={() => setTab(t as any)} style={{
                 background: "none", border: "none", cursor: "pointer",
                 color: tab === t ? T.accent : T.grayD, fontSize: 11, fontWeight: 800,
