@@ -48,7 +48,7 @@ export default function StakePage() {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
 
-  const [tab, setTab] = useState<"stake" | "store" | "burn" | "dashboard" | "admin">("stake");
+  const [tab, setTab] = useState<"store" | "burn" | "dashboard" | "admin">("store");
   const [ownedNfts, setOwnedNfts] = useState<OwnedNFT[]>([]);
   const [listedIds, setListedIds] = useState<Set<string>>(new Set());
   const [stakedIds, setStakedIds] = useState<Set<string>>(new Set());
@@ -372,7 +372,7 @@ export default function StakePage() {
             <span style={{ fontSize: 18, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: T.accent }}>CAMBRILIO</span>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            {["stake", "store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])].map(t => (
+            {["store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])].map(t => (
               <button key={t} onClick={() => setTab(t as any)} style={{
                 background: "none", border: "none", cursor: "pointer",
                 color: tab === t ? T.accent : T.grayD, fontSize: 11, fontWeight: 800,
@@ -398,7 +398,7 @@ export default function StakePage() {
         )}
 
         {/* ═══ STAKE TAB ═══ */}
-        {tab === "stake" && (
+        {false && (
           <>
             {!isConnected ? (
               <div style={{ textAlign: "center", padding: "80px 20px" }}>
@@ -408,7 +408,6 @@ export default function StakePage() {
                   Stake your Cambrilios without leaving your wallet. Earn <span style={{ color: T.cum, fontWeight: 700 }}>$CUM tickets</span> every 24 hours. Spend them in the store for WL spots.
                 </p>
                 <p style={{ fontSize: 12, color: T.grayD, fontFamily: "monospace", marginBottom: 30 }}>1 staked NFT = 1 $CUM / day</p>
-                <ConnectButton />
               </div>
             ) : loading ? (
               <div style={{ textAlign: "center", padding: 60, fontSize: 11, fontFamily: "monospace", color: T.grayD }}>⏳ Loading your Cambrilios...</div>
