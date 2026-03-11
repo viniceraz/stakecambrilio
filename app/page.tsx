@@ -148,7 +148,7 @@ export default function StakePage() {
     try {
       const ids = Array.from(selectedIds);
       const message = `I confirm soft staking ${ids.length} Cambrilio NFT(s): ${ids.join(", ")}\nWallet: ${address}\nTimestamp: ${new Date().toISOString()}`;
-      const signature = await signMessageAsync({ message });
+      const signature = await signMessageAsync({ account: address, message });
       const res = await fetch("/api/stake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, tokenIds: ids, signature }) });
       const data = await res.json();
       if (data.success) { showMsg(`Staked ${data.staked} NFT(s)! Total: ${data.total}`); setSelectedIds(new Set()); await loadUserData(); await loadLeaderboard(); }
