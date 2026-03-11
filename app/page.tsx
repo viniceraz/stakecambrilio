@@ -397,6 +397,19 @@ export default function StakePage() {
           <div style={{ padding: "12px 16px", marginBottom: 16, borderRadius: 8, background: msgType === "err" ? `${T.burn}15` : `${T.success}15`, border: `1px solid ${msgType === "err" ? T.burn : T.success}30`, color: msgType === "err" ? T.burn : T.success, fontSize: 12, fontFamily: "monospace" }}>{msg}</div>
         )}
 
+        {/* Welcome section when not connected */}
+        {!isConnected && (
+          <div style={{ textAlign: "center", padding: "80px 20px", marginBottom: 40 }}>
+            <div style={{ fontSize: 48, marginBottom: 20 }}>🔥</div>
+            <h1 style={{ fontSize: 32, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, marginBottom: 12, color: T.accent }}>WELCOME TO CAMBRILIO</h1>
+            <p style={{ fontSize: 14, color: T.gray, maxWidth: 500, margin: "0 auto 16px", lineHeight: 1.8 }}>
+              Connect your wallet to access the store, burn rewards, and dashboard.
+            </p>
+            <p style={{ fontSize: 12, color: T.grayD, fontFamily: "monospace", marginBottom: 30 }}>Stake your NFTs to earn $CUM tickets!</p>
+            <ConnectButton />
+          </div>
+        )}
+
         {/* ═══ STAKE TAB ═══ */}
         {false && (
           <>
