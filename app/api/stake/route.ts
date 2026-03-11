@@ -46,15 +46,24 @@ export async function POST(req: NextRequest) {
       .eq("wallet_address", walletLower)
       .eq("is_active", true);
 
-    await sb.from("stakers").upsert(
-      {
-        wallet_address: walletLower,
-        total_staked: activeStakes?.length || validIds.length,
-        last_verified_at: new Date().toISOString(),
-        is_active: true,
-      },
-      { onConflict: "wallet_address" }
-    );
+   // Check if this is a new staker (no previous record)
+const { data: existing } = await sb
+  .from("stakers")
+  .select("wallet_address, last_claim_at")
+  .eq("wallet_address", walletLower)
+  .single();
+
+await sb.from("stakers").upsert(
+  {
+    wallet_address: walletLower,
+    total_staked: activeStakes?.length || validIds.length,
+    last_verified_at: new Date().toISOString(),
+    is_active: true,
+    // Reset claim timer on first stake so they must wait 24h
+    ...(!existing?.last_claim_at ? { last_claim_at: new Date().toISOString() } : {}),
+  },
+  { onConflict: "wallet_address" }
+);
 
     return NextResponse.json({
       success: true,
