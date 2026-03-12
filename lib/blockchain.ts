@@ -12,21 +12,31 @@ export interface OwnedNFT {
   image: string;
 }
 
-// Get all Cambrilio NFTs owned by a wallet
+// Get ALL Cambrilio NFTs owned by a wallet (paginated, handles 200+ NFTs)
 export async function getOwnedCambrilios(wallet: string): Promise<OwnedNFT[]> {
+  const all: OwnedNFT[] = [];
+  let pageKey: string | undefined = undefined;
+
   try {
-    const url = `${ALC_NFT}/getNFTsForOwner?owner=${wallet}&contractAddresses[]=${CONTRACT}&withMetadata=true&pageSize=100`;
-    const res = await fetch(url);
-    const data = await res.json();
-    return (data.ownedNfts || []).map((nft: any) => ({
-      tokenId: nft.tokenId || String(parseInt(nft.id?.tokenId || "0", 16)),
-      name: nft.name || nft.title || `Cambrilio #${nft.tokenId}`,
-      image: nft.image?.cachedUrl || nft.image?.thumbnailUrl || nft.image?.originalUrl || "",
-    }));
+    do {
+      const url = `${ALC_NFT}/getNFTsForOwner?owner=${wallet}&contractAddresses[]=${CONTRACT}&withMetadata=true&pageSize=100${pageKey ? `&pageKey=${pageKey}` : ""}`;
+      const r = await fetch(url);
+      const data = await r.json();
+
+      const nfts = (data.ownedNfts || []).map((nft: any) => ({
+        tokenId: nft.tokenId || String(parseInt(nft.id?.tokenId || "0", 16)),
+        name: nft.name || nft.title || `Cambrilio #${nft.tokenId}`,
+        image: nft.image?.cachedUrl || nft.image?.thumbnailUrl || nft.image?.originalUrl || "",
+      }));
+
+      all.push(...nfts);
+      pageKey = data.pageKey || undefined;
+    } while (pageKey);
   } catch (err) {
     console.error("Alchemy getNFTs error:", err);
-    return [];
   }
+
+  return all;
 }
 
 // Check if specific token IDs are still owned by the wallet

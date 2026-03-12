@@ -5,14 +5,16 @@ export async function GET() {
   try {
     const sb = getServiceSupabase();
 
-    const { data: leaders } = await sb
-      .from("stakers")
-      .select("*")
-      .eq("is_active", true)
-      .gt("total_staked", 0)
-      .order("total_staked", { ascending: false })
-      .limit(100);
+   const { data: leaders, error } = await sb
+  .from("stakers")
+  .select("*")
+  .eq("is_active", true)
+  .gt("total_staked", 0)
+  .order("total_staked", { ascending: false })
+  .limit(100);
 
+console.log("leaders:", leaders);
+console.log("error:", error);
     const { data: allActive } = await sb
       .from("stakes")
       .select("token_id")

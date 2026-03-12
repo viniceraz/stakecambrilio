@@ -101,6 +101,7 @@ export default function StakePage() {
   const [msg, setMsg] = useState("");
   const [msgType, setMsgType] = useState<"ok" | "err">("ok");
   const [stakeEnabled, setStakeEnabled] = useState(false);
+  const [transferEnabled, setTransferEnabled] = useState(true);
 
   // $CUM
   const [cumBalance, setCumBalance] = useState(0);
@@ -163,6 +164,8 @@ export default function StakePage() {
       // Check stake enabled setting
       const { data: setting } = await supabase.from("settings").select("value").eq("key", "stake_enabled").single();
       setStakeEnabled(setting?.value === "true");
+      const { data: tSetting } = await supabase.from("settings").select("value").eq("key", "transfer_enabled").single();
+      setTransferEnabled(tSetting?.value !== "false"); // default true if not set
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   }, [address]);
@@ -172,9 +175,10 @@ export default function StakePage() {
   const loadBurnData = useCallback(async () => { try { const p = new URLSearchParams(); if (address) p.set("wallet", address); if (isAdmin) p.set("admin", "true"); const res = await fetch(`/api/burn?${p}`); const data = await res.json(); setBurnRewards(data.rewards || []); setBurnClaims(data.claims || []); setAllBurnClaims(data.allClaims || []); } catch {} }, [address, isAdmin]);
   const loadAdminData = useCallback(async () => { if (!address || !isAdmin) return; try { const res = await fetch(`/api/admin?wallet=${address}`); const data = await res.json(); setAdminData(data); } catch {} }, [address, isAdmin]);
 
-  useEffect(() => { loadLeaderboard(); loadStore(); loadBurnData(); fetch("/api/verify", { method: "POST" }).catch(() => {}); /* Check stake setting publicly */ supabase.from("settings").select("value").eq("key", "stake_enabled").single().then(({ data }) => setStakeEnabled(data?.value === "true")); }, []);
-  useEffect(() => { if (isConnected && address) { loadUserData(); loadBurnData(); } }, [isConnected, address, loadUserData, loadBurnData]);
+  useEffect(() => { loadLeaderboard(); loadStore(); loadBurnData(); fetch("/api/verify", { method: "POST" }).catch(() => {}); supabase.from("settings").select("value").eq("key", "stake_enabled").single().then(({ data }) => setStakeEnabled(data?.value === "true")); supabase.from("settings").select("value").eq("key", "transfer_enabled").single().then(({ data }) => setTransferEnabled(data?.value !== "false")); }, []);
+  useEffect(() => { if (isConnected && address) { loadUserData(); loadBurnData(); loadLeaderboard(); } }, [isConnected, address, loadUserData, loadBurnData, loadLeaderboard]);
   useEffect(() => { if (isAdmin && tab === "admin") loadAdminData(); }, [isAdmin, tab, loadAdminData]);
+  useEffect(() => { if (tab === "dashboard") loadLeaderboard(); }, [tab, loadLeaderboard]);
 
   // ═══ STAKE HANDLERS ═══
   const handleStake = async () => {
@@ -267,6 +271,12 @@ export default function StakePage() {
     if (!address) return;
     const newVal = !stakeEnabled;
     try { const res = await fetch("/api/admin", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, setting: { key: "stake_enabled", value: String(newVal) } }) }); const data = await res.json(); if (data.success) { setStakeEnabled(newVal); showMsg(`Staking ${newVal ? "ENABLED" : "DISABLED"}`); } } catch (err: any) { showMsg(err.message, "err"); }
+  };
+
+  const toggleTransferEnabled = async () => {
+    if (!address) return;
+    const newVal = !transferEnabled;
+    try { const res = await fetch("/api/admin", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, setting: { key: "transfer_enabled", value: String(newVal) } }) }); const data = await res.json(); if (data.success) { setTransferEnabled(newVal); showMsg(`$CUM Transfer ${newVal ? "ENABLED" : "DISABLED"}`); } } catch (err: any) { showMsg(err.message, "err"); }
   };
 
   const updateBurnTxInput = (rid: number, idx: number, val: string) => setBurnTxInputs(prev => { const a = [...(prev[rid] || [""])]; a[idx] = val; return { ...prev, [rid]: a }; });
@@ -362,6 +372,7 @@ export default function StakePage() {
                 </div>
 
                 {/* Send $CUM to another wallet */}
+                {transferEnabled && (
                 <div style={{ ...PS, padding: 16 }}>
                   <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD, letterSpacing: 2, fontWeight: 700, marginBottom: 10 }}>SEND $CUM TO ANOTHER WALLET</div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -376,6 +387,7 @@ export default function StakePage() {
                     <button onClick={handleTransferCum} disabled={transferring || !transferWallet || !transferAmount} style={{ background: cumBalance > 0 && transferWallet && transferAmount ? T.cum : T.grayK, color: T.bg, border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 10, fontWeight: 900, fontFamily: "monospace", cursor: cumBalance > 0 ? "pointer" : "not-allowed", opacity: transferring ? 0.6 : 1, whiteSpace: "nowrap" }}>{transferring ? "SENDING..." : "SEND $CUM"}</button>
                   </div>
                 </div>
+                )}
 
                 {/* Stake disabled notice */}
                 {!stakeEnabled && (
@@ -614,6 +626,12 @@ export default function StakePage() {
             <div style={{ ...PS, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
               <div><div style={{ fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: T.white }}>STAKING</div><div style={{ fontSize: 9, color: T.grayD, fontFamily: "monospace" }}>Enable or disable new stakes</div></div>
               <button onClick={toggleStakeEnabled} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: stakeEnabled ? T.success : T.burn, color: T.bg, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>{stakeEnabled ? "ON ✓" : "OFF ✕"}</button>
+            </div>
+
+            {/* Transfer toggle */}
+            <div style={{ ...PS, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div><div style={{ fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: T.white }}>$CUM TRANSFER</div><div style={{ fontSize: 9, color: T.grayD, fontFamily: "monospace" }}>Enable or disable $CUM transfers between wallets</div></div>
+              <button onClick={toggleTransferEnabled} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: transferEnabled ? T.success : T.burn, color: T.bg, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>{transferEnabled ? "ON ✓" : "OFF ✕"}</button>
             </div>
 
             {/* Create store listing */}
