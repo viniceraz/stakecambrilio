@@ -532,11 +532,11 @@ export default function StakePage() {
               <code style={{ fontSize: 11, fontFamily: "monospace", color: T.burn, background: `${T.burn}10`, padding: "3px 8px", borderRadius: 6, border: `1px solid ${T.burn}20`, wordBreak: "break-all" }}>0x000000000000000000000000000000000000dEaD</code>
               <button onClick={() => navigator.clipboard.writeText("0x000000000000000000000000000000000000dEaD")} style={{ background: `${T.burn}15`, border: `1px solid ${T.burn}30`, borderRadius: 6, padding: "3px 8px", color: T.burn, fontSize: 8, fontFamily: "monospace", fontWeight: 700, cursor: "pointer" }}>COPY</button>
             </div>
-            {burnRewards.filter(r => r.is_active && !isExpired(r.expires_at)).length === 0 ? (
+            {burnRewards.filter(r => r.is_active).length === 0 ? (
               <div style={{ textAlign: "center", padding: 60 }}><div style={{ fontSize: 36 }}>🔮</div><div style={{ fontSize: 16, fontWeight: 900, fontFamily: "monospace", color: T.accent, letterSpacing: 2, marginTop: 10 }}>SOONBRIA!</div></div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-                {burnRewards.filter(r => r.is_active && !isExpired(r.expires_at)).map(reward => {
+                {burnRewards.filter(r => r.is_active).map(reward => {
                   const isActive = activeBurnId === reward.id;
                   const myClaim = burnClaims.find(c => c.reward_id === reward.id);
                   const txInputs = burnTxInputs[reward.id] || [""];
