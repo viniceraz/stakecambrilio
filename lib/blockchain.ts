@@ -44,11 +44,12 @@ export function getBoostMultiplier(traits: NFTTrait[]): number {
 }
 
 function parseTraits(nft: any): NFTTrait[] {
-  const attrs =
+  const raw =
     nft.raw?.metadata?.attributes ||
     nft.metadata?.attributes ||
     nft.rawMetadata?.attributes ||
     [];
+  const attrs = Array.isArray(raw) ? raw : [];
   return attrs
     .filter((a: any) => a && a.trait_type !== undefined && a.value !== undefined)
     .map((a: any) => ({ trait_type: String(a.trait_type), value: String(a.value) }));
@@ -66,14 +67,24 @@ export async function getOwnedCambrilios(wallet: string): Promise<OwnedNFT[]> {
       const data = await r.json();
 
       const nfts = (data.ownedNfts || []).map((nft: any) => {
-        const traits = parseTraits(nft);
-        return {
-          tokenId: nft.tokenId || String(parseInt(nft.id?.tokenId || "0", 16)),
-          name: nft.name || nft.title || `Cambrilio #${nft.tokenId}`,
-          image: nft.image?.cachedUrl || nft.image?.thumbnailUrl || nft.image?.originalUrl || "",
-          traits,
-          boostMultiplier: getBoostMultiplier(traits),
-        };
+        try {
+          const traits = parseTraits(nft);
+          return {
+            tokenId: nft.tokenId || String(parseInt(nft.id?.tokenId || "0", 16)),
+            name: nft.name || nft.title || `Cambrilio #${nft.tokenId}`,
+            image: nft.image?.cachedUrl || nft.image?.thumbnailUrl || nft.image?.originalUrl || "",
+            traits,
+            boostMultiplier: getBoostMultiplier(traits),
+          };
+        } catch {
+          return {
+            tokenId: nft.tokenId || String(parseInt(nft.id?.tokenId || "0", 16)),
+            name: nft.name || nft.title || `Cambrilio #${nft.tokenId}`,
+            image: nft.image?.cachedUrl || nft.image?.thumbnailUrl || nft.image?.originalUrl || "",
+            traits: [],
+            boostMultiplier: 1,
+          };
+        }
       });
 
       all.push(...nfts);

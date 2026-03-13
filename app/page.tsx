@@ -151,12 +151,13 @@ export default function StakePage() {
     if (!address) return;
     setLoading(true);
     try {
-      const [nfts, { data: stakes }] = await Promise.all([
+      const [nfts, { data: stakes, error: stakesErr }] = await Promise.all([
         getOwnedCambrilios(address),
         supabase.from("stakes").select("token_id").eq("wallet_address", address.toLowerCase()).eq("is_active", true),
       ]);
       setOwnedNfts(nfts);
-      setStakedIds(new Set((stakes || []).map((s: any) => s.token_id)));
+      // Only update stakedIds if query succeeded — prevents false "unstaked" display on network errors
+      if (!stakesErr && stakes) setStakedIds(new Set(stakes.map((s: any) => s.token_id)));
       if (nfts.length > 0) { const listed = await checkListedClient(nfts.map(n => n.tokenId)); setListedIds(listed); }
       const balRes = await fetch(`/api/balance?wallet=${address}`);
       const bal = await balRes.json();
