@@ -303,12 +303,35 @@ export default function StakePage() {
 
   // Check if listing/reward is expired
   const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt).getTime() <= Date.now() : false;
+  const RECENT_ALERT_WINDOW_MS = 48 * 60 * 60 * 1000;
+  const nowTs = Date.now();
+  const newStoreTitles = listings
+    .filter(l => l.is_active && nowTs - new Date(l.created_at).getTime() <= RECENT_ALERT_WINDOW_MS)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 3)
+    .map(l => l.title);
+  const newBurnTitles = burnRewards
+    .filter(r => r.is_active && nowTs - new Date(r.created_at).getTime() <= RECENT_ALERT_WINDOW_MS)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 3)
+    .map(r => r.title);
+  const alertParts: string[] = [];
+  if (newStoreTitles.length > 0) alertParts.push(`🛒 NEW STORE: ${newStoreTitles.join(" • ")}`);
+  if (newBurnTitles.length > 0) alertParts.push(`🔥 NEW BURN: ${newBurnTitles.join(" • ")}`);
+  const topAnnouncement = alertParts.join("   ✦   ");
 
   // ═══ RENDER ═══
   return (
     <div style={{ minHeight: "100vh", background: `${T.bg}cc`, color: T.white, fontFamily: "'Inter', -apple-system, sans-serif" }}>
       {/* NAV */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: `${T.bg}ee`, backdropFilter: "blur(12px)", borderBottom: `1px solid ${T.border}`, padding: "0 16px" }}>
+        {topAnnouncement && (
+          <div style={{ height: 28, display: "flex", alignItems: "center", borderBottom: `1px solid ${T.border}`, overflow: "hidden", background: `${T.accent}08` }}>
+            <div className="top-alert-marquee-track">
+              <span className="top-alert-text">{topAnnouncement}   ✦   {topAnnouncement}   ✦   {topAnnouncement}</span>
+            </div>
+          </div>
+        )}
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56, gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
             <img src="/logo.png" alt="Logo" style={{ height: 20, width: 'auto' }} />
@@ -337,9 +360,29 @@ export default function StakePage() {
         )}
       </nav>
       <style>{`
+        .top-alert-marquee-track {
+          width: 100%;
+          white-space: nowrap;
+          will-change: transform;
+          animation: topAlertMarquee 22s linear infinite;
+        }
+        .top-alert-text {
+          display: inline-block;
+          padding-left: 100%;
+          font-size: 10px;
+          font-family: monospace;
+          font-weight: 800;
+          letter-spacing: 1px;
+          color: ${T.accent};
+        }
+        @keyframes topAlertMarquee {
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-100%); }
+        }
         @media (max-width: 640px) {
           .nav-tab-desktop { display: none !important; }
           .nav-hamburger { display: flex !important; }
+          .top-alert-text { font-size: 9px; }
         }
         @media (min-width: 641px) {
           .nav-hamburger { display: none !important; }
