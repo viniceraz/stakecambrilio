@@ -161,11 +161,12 @@ export async function refreshNFTMetadata(tokenIds: string[]): Promise<number> {
   let refreshed = 0;
   try {
     for (const tokenId of tokenIds) {
-      const url = `${ALC_NFT}/refreshNftMetadata?contractAddress=${CONTRACT}&tokenId=${tokenId}`;
+      // Use getNFTMetadata with refreshCache=true to force Alchemy to re-fetch from source
+      const url = `${ALC_NFT}/getNFTMetadata?contractAddress=${CONTRACT}&tokenId=${tokenId}&refreshCache=true`;
       const res = await fetch(url);
       if (res.ok) refreshed++;
       // Rate limit
-      if (tokenIds.length > 1) await new Promise((r) => setTimeout(r, 250));
+      if (tokenIds.length > 1) await new Promise((r) => setTimeout(r, 300));
     }
   } catch (err) {
     console.error("refreshNFTMetadata error:", err);
