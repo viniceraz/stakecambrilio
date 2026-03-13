@@ -15,13 +15,23 @@ export async function GET() {
 
 console.log("leaders:", leaders);
 console.log("error:", error);
-    const { data: allActive } = await sb
-      .from("stakes")
-      .select("token_id")
-      .eq("is_active", true);
+    // Count total active stakes with pagination to bypass 1000 row limit
+    let totalNFTsStaked = 0;
+    let page = 0;
+    const pageSize = 1000;
+    while (true) {
+      const { data: batch } = await sb
+        .from("stakes")
+        .select("token_id")
+        .eq("is_active", true)
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+      if (!batch || batch.length === 0) break;
+      totalNFTsStaked += batch.length;
+      if (batch.length < pageSize) break;
+      page++;
+    }
 
-    const totalStakers = leaders?.length || 0;
-    const totalNFTsStaked = allActive?.length || 0;
+    const totalStakers = (leaders || []).length;
 
     const leaderboard = (leaders || []).map((s) => ({
       wallet: s.wallet_address,

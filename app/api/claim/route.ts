@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceSupabase } from "@/lib/supabase";
+import { getNFTTraits } from "@/lib/blockchain";
 
-// Rate: 1 staked NFT = 1 $CUM per 24 hours
-const CUM_PER_NFT_PER_HOUR = 1 / 24;
+// Base rate: 1 staked NFT = 1 $CUM per 24 hours (boosted NFTs earn more)
+const BASE_CUM_PER_NFT_PER_HOUR = 1 / 24;
 const MIN_HOURS_BETWEEN_CLAIMS = 24; // Must wait 24h between claims
 
 export async function POST(req: NextRequest) {
@@ -42,8 +43,28 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Calculate $CUM earned
-    const earned = Math.floor(staker.total_staked * hoursElapsed * CUM_PER_NFT_PER_HOUR);
+    // Get all active staked token IDs for this wallet
+    const { data: activeStakes } = await sb
+      .from("stakes")
+      .select("token_id")
+      .eq("wallet_address", w)
+      .eq("is_active", true);
+
+    const stakedTokenIds = (activeStakes || []).map((s: any) => s.token_id);
+
+    // Fetch traits and calculate per-NFT boost
+    const traitsMap = await getNFTTraits(stakedTokenIds);
+    let totalEffectiveNfts = 0;
+    const boostDetails: { tokenId: string; boost: number }[] = [];
+    for (const tokenId of stakedTokenIds) {
+      const info = traitsMap.get(tokenId);
+      const boost = info?.boost || 1;
+      totalEffectiveNfts += boost;
+      boostDetails.push({ tokenId, boost });
+    }
+
+    // Calculate $CUM earned with boosts
+    const earned = Math.floor(totalEffectiveNfts * hoursElapsed * BASE_CUM_PER_NFT_PER_HOUR);
 
     if (earned < 1) {
       return NextResponse.json({ error: "Not enough $CUM accumulated yet" }, { status: 400 });
@@ -73,7 +94,9 @@ export async function POST(req: NextRequest) {
       balance: newBalance,
       totalEarned: newTotalEarned,
       stakedCount: staker.total_staked,
+      effectiveRate: totalEffectiveNfts,
       hoursElapsed: Math.floor(hoursElapsed),
+      boosts: boostDetails.filter((b) => b.boost > 1),
     });
   } catch (err: any) {
     console.error("Claim error:", err);

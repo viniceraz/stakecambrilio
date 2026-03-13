@@ -110,6 +110,8 @@ export default function StakePage() {
   const [cumSpent, setCumSpent] = useState(0);
   const [cumRate, setCumRate] = useState(0);
   const [claiming, setClaiming] = useState(false);
+  const [nftBoostMap, setNftBoostMap] = useState<Record<string, number>>({});
+  const [refreshingMeta, setRefreshingMeta] = useState(false);
   const [myPurchases, setMyPurchases] = useState<Purchase[]>([]);
   const [transferWallet, setTransferWallet] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
@@ -159,6 +161,10 @@ export default function StakePage() {
       const balRes = await fetch(`/api/balance?wallet=${address}`);
       const bal = await balRes.json();
       setCumBalance(bal.balance || 0); setCumPending(bal.pendingCum || 0); setCumEarned(bal.totalEarned || 0); setCumSpent(bal.totalSpent || 0); setCumRate(bal.ratePerDay || 0); setMyPurchases(bal.purchases || []);
+      // Build boost map from balance API
+      const bMap: Record<string, number> = {};
+      if (bal.nftBoosts) for (const b of bal.nftBoosts) bMap[b.tokenId] = b.boost;
+      setNftBoostMap(bMap);
       const { data: adm } = await supabase.from("admins").select("wallet_address").eq("wallet_address", address.toLowerCase()).single();
       setIsAdmin(!!adm);
       // Check stake enabled setting
@@ -205,6 +211,11 @@ export default function StakePage() {
   const handleClaim = async () => {
     if (!address) return; setClaiming(true);
     try { const res = await fetch("/api/claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address }) }); const data = await res.json(); if (data.success) { showMsg(`Claimed ${data.claimed} $CUM! Balance: ${data.balance}`); await loadUserData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); } finally { setClaiming(false); }
+  };
+
+  const handleRefreshMetadata = async () => {
+    if (!address) return; setRefreshingMeta(true);
+    try { const res = await fetch("/api/refresh-metadata", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address }) }); const data = await res.json(); if (data.success) { showMsg(data.message); await loadUserData(); } else showMsg(data.error || "Failed to refresh", "err"); } catch (err: any) { showMsg(err.message, "err"); } finally { setRefreshingMeta(false); }
   };
 
   const handleTransferCum = async () => {
@@ -346,7 +357,9 @@ export default function StakePage() {
                 <img src="/logo2.png" alt="Logo" style={{ height: 64, width: 'auto', marginBottom: 16 }} />
                 <h1 style={{ fontSize: 28, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, marginBottom: 10, color: T.accent }}>SOFT STAKE</h1>
                 <p style={{ fontSize: 13, color: T.gray, maxWidth: 420, margin: "0 auto 14px", lineHeight: 1.8 }}>Stake your Cambrilios without leaving your wallet. Earn <span style={{ color: T.cum, fontWeight: 700 }}>$CUM tickets</span> every 24 hours.</p>
-                <p style={{ fontSize: 11, color: T.grayD, fontFamily: "monospace", marginBottom: 24 }}>1 staked NFT = 1 $CUM / day</p>
+                <p style={{ fontSize: 11, color: T.grayD, fontFamily: "monospace", marginBottom: 8 }}>1 staked NFT = 1 $CUM / day</p>
+                <p style={{ fontSize: 10, color: T.accent, fontFamily: "monospace", marginBottom: 4 }}>🎉 Party Hat NFTs = <b>3x</b> boost</p>
+                <p style={{ fontSize: 10, color: T.gold, fontFamily: "monospace", marginBottom: 24 }}>👑 1/1 NFTs = <b>5x</b> boost</p>
               </div>
             ) : loading ? (
               <div style={{ textAlign: "center", padding: 60, fontSize: 11, fontFamily: "monospace", color: T.grayD }}>⏳ Loading your Cambrilios...</div>
@@ -366,9 +379,12 @@ export default function StakePage() {
                       <span style={{ fontSize: 32, fontWeight: 900, fontFamily: "monospace", color: T.cum }}>{cumBalance}</span>
                       <span style={{ fontSize: 12, fontFamily: "monospace", color: T.cum, opacity: 0.6 }}>$CUM</span>
                     </div>
-                    <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 4 }}>Rate: {cumRate}/day • Pending: ~{cumPending} • Earned: {cumEarned} • Spent: {cumSpent}</div>
+                    <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 4 }}>Rate: {cumRate}/day{Object.keys(nftBoostMap).length > 0 && <span style={{ color: T.accent }}> (boosted!)</span>} • Pending: ~{cumPending} • Earned: {cumEarned} • Spent: {cumSpent}</div>
                   </div>
-                  <button onClick={handleClaim} disabled={claiming || cumPending < 1} style={{ background: cumPending >= 1 ? T.cum : T.grayK, color: T.bg, border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: cumPending >= 1 ? "pointer" : "not-allowed", opacity: claiming ? 0.6 : 1 }}>{claiming ? "CLAIMING..." : cumPending >= 1 ? `CLAIM ${cumPending} $CUM` : "ACCUMULATING (24h cycle)"}</button>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button onClick={handleClaim} disabled={claiming || cumPending < 1} style={{ background: cumPending >= 1 ? T.cum : T.grayK, color: T.bg, border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: cumPending >= 1 ? "pointer" : "not-allowed", opacity: claiming ? 0.6 : 1 }}>{claiming ? "CLAIMING..." : cumPending >= 1 ? `CLAIM ${cumPending} $CUM` : "ACCUMULATING (24h cycle)"}</button>
+                    <button onClick={handleRefreshMetadata} disabled={refreshingMeta} style={{ background: `${T.sweep}15`, border: `1px solid ${T.sweep}40`, borderRadius: 8, padding: "10px 14px", fontSize: 9, fontWeight: 700, fontFamily: "monospace", color: T.sweep, cursor: refreshingMeta ? "wait" : "pointer", opacity: refreshingMeta ? 0.6 : 1 }}>{refreshingMeta ? "⏳ REFRESHING..." : "🔄 REFRESH METADATA"}</button>
+                  </div>
                 </div>
 
                 {/* Send $CUM to another wallet */}
@@ -405,18 +421,23 @@ export default function StakePage() {
                       {stakeEnabled && <button onClick={() => handleUnstake(stakedNfts.map(n => n.tokenId))} disabled={staking} style={{ background: `${T.burn}15`, border: `1px solid ${T.burn}40`, borderRadius: 6, padding: "5px 12px", color: T.burn, fontSize: 9, fontFamily: "monospace", fontWeight: 700, cursor: "pointer" }}>UNSTAKE ALL</button>}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
-                      {stakedNfts.map(nft => (
-                        <div key={nft.tokenId} style={{ background: T.card, border: `1px solid ${T.sweep}40`, borderRadius: 10, overflow: "hidden" }}>
+                      {stakedNfts.map(nft => {
+                        const boost = nftBoostMap[nft.tokenId] || nft.boostMultiplier || 1;
+                        const boostColor = boost >= 5 ? T.gold : boost >= 3 ? T.accent : "";
+                        return (
+                        <div key={nft.tokenId} style={{ background: T.card, border: `1px solid ${boost > 1 ? boostColor + "60" : T.sweep + "40"}`, borderRadius: 10, overflow: "hidden" }}>
                           <div style={{ aspectRatio: "1", position: "relative", background: T.bg }}>
                             {nft.image ? <img src={nft.image} alt={nft.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🎨</div>}
                             <div style={{ position: "absolute", top: 3, right: 3, background: T.sweep, borderRadius: 4, padding: "2px 5px", fontSize: 7, fontWeight: 900, fontFamily: "monospace", color: T.bg }}>STAKED</div>
+                            {boost > 1 && <div style={{ position: "absolute", top: 3, left: 3, background: boostColor, borderRadius: 4, padding: "2px 5px", fontSize: 7, fontWeight: 900, fontFamily: "monospace", color: T.bg }}>{boost}x BOOST</div>}
                           </div>
                           <div style={{ padding: "5px 7px" }}>
                             <div style={{ fontSize: 9, fontWeight: 700, fontFamily: "monospace", color: T.sweep, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nft.name}</div>
-                            <div style={{ fontSize: 7, fontFamily: "monospace", color: T.cum, marginTop: 2 }}>+1 $CUM/day</div>
+                            <div style={{ fontSize: 7, fontFamily: "monospace", color: boost > 1 ? boostColor : T.cum, marginTop: 2, fontWeight: boost > 1 ? 800 : 400 }}>+{boost} $CUM/day{boost > 1 && " 🔥"}</div>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -449,20 +470,26 @@ export default function StakePage() {
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
                       {stakeableNfts.map(nft => {
                         const sel = selectedIds.has(nft.tokenId);
+                        const boost = nft.boostMultiplier || 1;
+                        const boostColor = boost >= 5 ? T.gold : boost >= 3 ? T.accent : "";
                         return (
                           <div key={nft.tokenId} onClick={() => toggleSelect(nft.tokenId)} style={{ background: T.card, borderRadius: 10, overflow: "hidden", cursor: "pointer", border: `2px solid ${sel ? T.accent : T.border}`, transition: "all 0.15s" }}>
                             <div style={{ aspectRatio: "1", position: "relative", background: T.bg }}>
                               {nft.image ? <img src={nft.image} alt={nft.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>🎨</div>}
                               {sel && <div style={{ position: "absolute", inset: 0, background: `${T.accent}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ fontSize: 28 }}>✓</span></div>}
+                              {boost > 1 && <div style={{ position: "absolute", top: 3, left: 3, background: boostColor, borderRadius: 4, padding: "2px 5px", fontSize: 7, fontWeight: 900, fontFamily: "monospace", color: T.bg }}>{boost}x BOOST</div>}
                             </div>
-                            <div style={{ padding: "5px 7px" }}><div style={{ fontSize: 9, fontWeight: 700, fontFamily: "monospace", color: sel ? T.accent : T.white, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nft.name}</div></div>
+                            <div style={{ padding: "5px 7px" }}>
+                              <div style={{ fontSize: 9, fontWeight: 700, fontFamily: "monospace", color: sel ? T.accent : T.white, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nft.name}</div>
+                              {boost > 1 && <div style={{ fontSize: 7, fontFamily: "monospace", color: boostColor, fontWeight: 800 }}>+{boost} $CUM/day 🔥</div>}
+                            </div>
                           </div>
                         );
                       })}
                     </div>
                     {selectedIds.size > 0 && (
                       <div style={{ position: "sticky", bottom: 16, marginTop: 16, background: `${T.bg}ee`, backdropFilter: "blur(12px)", border: `1px solid ${T.accent}40`, borderRadius: 12, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-                        <div><div style={{ fontSize: 13, fontWeight: 900, fontFamily: "monospace", color: T.accent }}>{selectedIds.size} NFT{selectedIds.size > 1 ? "s" : ""}</div><div style={{ fontSize: 9, color: T.cum, fontFamily: "monospace" }}>= {selectedIds.size} $CUM/day</div></div>
+                        <div><div style={{ fontSize: 13, fontWeight: 900, fontFamily: "monospace", color: T.accent }}>{selectedIds.size} NFT{selectedIds.size > 1 ? "s" : ""}</div><div style={{ fontSize: 9, color: T.cum, fontFamily: "monospace" }}>= {ownedNfts.filter(n => selectedIds.has(n.tokenId)).reduce((sum, n) => sum + (n.boostMultiplier || 1), 0)} $CUM/day{ownedNfts.filter(n => selectedIds.has(n.tokenId)).some(n => (n.boostMultiplier || 1) > 1) ? " 🔥" : ""}</div></div>
                         <button onClick={handleStake} disabled={staking} style={{ background: T.accent, color: T.bg, border: "none", borderRadius: 8, padding: "10px 28px", fontSize: 13, fontWeight: 900, fontFamily: "monospace", letterSpacing: 2, cursor: staking ? "wait" : "pointer", opacity: staking ? 0.6 : 1 }}>{staking ? "SIGNING..." : "🔒 STAKE NOW"}</button>
                       </div>
                     )}
@@ -732,7 +759,7 @@ export default function StakePage() {
 
         {/* FOOTER */}
         <div style={{ textAlign: "center", padding: "30px 0 0", borderTop: `1px solid ${T.border}`, marginTop: 24 }}>
-          <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, letterSpacing: 2, lineHeight: 2 }}>CAMBRILIO SOFT STAKE • BASE • 1 NFT = 1 $CUM/DAY<br />NFTs never leave your wallet</div>
+          <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, letterSpacing: 2, lineHeight: 2 }}>CAMBRILIO SOFT STAKE • BASE • 1 NFT = 1 $CUM/DAY • PARTY HAT = 3x • 1/1 = 5x<br />NFTs never leave your wallet</div>
         </div>
       </div>
     </div>
