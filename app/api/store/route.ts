@@ -48,20 +48,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Listing not found or inactive" }, { status: 404 });
     }
 
+    const now = Date.now();
+    if (listing.starts_at && new Date(listing.starts_at).getTime() > now) {
+      return NextResponse.json({ error: "Sale has not started yet" }, { status: 400 });
+    }
+    if (listing.expires_at && new Date(listing.expires_at).getTime() <= now) {
+      return NextResponse.json({ error: "Sale has ended" }, { status: 400 });
+    }
+
     if (listing.remaining_spots <= 0) {
       return NextResponse.json({ error: "No spots remaining" }, { status: 400 });
     }
 
-    // Check if already purchased this listing
-    const { data: existing } = await sb
+    // Check per-wallet purchase limit
+    const maxPerWallet = listing.max_per_wallet || 1;
+    const { data: existingPurchases } = await sb
       .from("store_purchases")
       .select("id")
       .eq("listing_id", listingId)
-      .eq("buyer_wallet", w)
-      .single();
+      .eq("buyer_wallet", w);
 
-    if (existing) {
-      return NextResponse.json({ error: "You already purchased this WL" }, { status: 400 });
+    const purchaseCount = existingPurchases?.length || 0;
+    if (purchaseCount >= maxPerWallet) {
+      return NextResponse.json({
+        error: maxPerWallet === 1
+          ? "You already purchased this WL"
+          : `Limit reached (${purchaseCount}/${maxPerWallet} per wallet)`,
+      }, { status: 400 });
     }
 
     // Check if wl_wallet already has a spot

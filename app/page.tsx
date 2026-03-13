@@ -18,7 +18,7 @@ const T = {
 
 // ═══ INTERFACES ═══
 interface LeaderEntry { wallet: string; staked: number; balance: number; earned: number; }
-interface StoreListing { id: number; title: string; description: string; image_url: string; project_url: string; price_cum: number; total_spots: number; remaining_spots: number; is_active: boolean; created_at: string; expires_at: string | null; }
+interface StoreListing { id: number; title: string; description: string; image_url: string; project_url: string; price_cum: number; total_spots: number; remaining_spots: number; is_active: boolean; created_at: string; starts_at: string | null; expires_at: string | null; max_per_wallet?: number; }
 interface Purchase { id: number; listing_id: number; buyer_wallet: string; wl_wallet: string; cum_spent: number; purchased_at: string; store_listings?: { title: string }; }
 interface BurnReward { id: number; title: string; description: string; image_url: string; burn_cost: number; total_supply: number; remaining_supply: number; is_active: boolean; created_at: string; expires_at: string | null; starts_at: string | null; }
 interface BurnClaim { id: number; reward_id: number; wallet_address: string; token_ids: string[]; tx_hashes: string[]; status: string; admin_notes: string; submitted_at: string; burn_rewards?: { title: string; image_url: string }; }
@@ -56,7 +56,7 @@ function Countdown({ expiresAt, label }: { expiresAt: string; label?: string }) 
 }
 
 // Starts-at countdown: shows countdown + "LOCKED" until start time, then returns null
-function StartsInCountdown({ startsAt }: { startsAt: string }) {
+function StartsInCountdown({ startsAt, subtitle }: { startsAt: string; subtitle?: string }) {
   const [left, setLeft] = useState("");
   const [started, setStarted] = useState(false);
   useEffect(() => {
@@ -78,7 +78,7 @@ function StartsInCountdown({ startsAt }: { startsAt: string }) {
     <div style={{ padding: "14px 16px", background: `${T.gold}08`, border: `1px solid ${T.gold}30`, borderRadius: 10, textAlign: "center" }}>
       <div style={{ fontSize: 9, fontFamily: "monospace", color: T.gold, letterSpacing: 2, fontWeight: 700, marginBottom: 6 }}>🔒 OPENS IN</div>
       <div style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: T.gold, letterSpacing: 2, textShadow: `0 0 20px ${T.gold}33` }}>{left}</div>
-      <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginTop: 6, letterSpacing: 1 }}>BURN WILL BE AVAILABLE WHEN COUNTDOWN ENDS</div>
+      <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginTop: 6, letterSpacing: 1 }}>{subtitle || "AVAILABLE WHEN COUNTDOWN ENDS"}</div>
     </div>
   );
 }
@@ -137,7 +137,7 @@ export default function StakePage() {
   // Admin
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminData, setAdminData] = useState<any>(null);
-  const [newListing, setNewListing] = useState({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", expiresAt: "" });
+  const [newListing, setNewListing] = useState({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", startsAt: "", expiresAt: "", maxPerWallet: "1" });
   const [newBurnReward, setNewBurnReward] = useState({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" });
 
   // Mobile menu
@@ -271,7 +271,7 @@ export default function StakePage() {
   // ═══ ADMIN HANDLERS ═══
   const handleCreateListing = async () => {
     if (!address) return;
-    try { const res = await fetch("/api/admin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, ...newListing, expiresAt: newListing.expiresAt || null }) }); const data = await res.json(); if (data.success) { showMsg(`Listing created!`); setNewListing({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", expiresAt: "" }); await loadStore(); await loadAdminData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); }
+    try { const res = await fetch("/api/admin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, ...newListing, startsAt: newListing.startsAt || null, expiresAt: newListing.expiresAt || null }) }); const data = await res.json(); if (data.success) { showMsg(`Listing created!`); setNewListing({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", startsAt: "", expiresAt: "", maxPerWallet: "1" }); await loadStore(); await loadAdminData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); }
   };
 
   const handleCreateBurnReward = async () => {
@@ -511,16 +511,26 @@ export default function StakePage() {
               <div style={{ textAlign: "center", padding: 60 }}><div style={{ fontSize: 36 }}>🔮</div><div style={{ fontSize: 16, fontWeight: 900, fontFamily: "monospace", color: T.accent, letterSpacing: 2, marginTop: 10 }}>SOONBRIA!</div><div style={{ fontSize: 10, color: T.grayD, fontFamily: "monospace", marginTop: 6 }}>No listings yet.</div></div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
-                {listings.filter(l => l.is_active && !isExpired(l.expires_at)).map(l => (
+                {listings.filter(l => l.is_active).map(l => {
+                  const notStarted = l.starts_at ? new Date(l.starts_at).getTime() > Date.now() : false;
+                  const ended = isExpired(l.expires_at);
+                  const soldOut = l.remaining_spots <= 0;
+                  const buyDisabled = soldOut || ended || notStarted;
+                  return (
                   <div key={l.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
                     {l.image_url && <img src={l.image_url} alt={l.title} style={{ width: "100%", height: 140, objectFit: "cover" }} />}
                     <div style={{ padding: 14 }}>
                       <h3 style={{ fontSize: 15, fontWeight: 800, fontFamily: "monospace", color: T.white, marginBottom: 4 }}>{l.title}</h3>
                       {l.description && <p style={{ fontSize: 10, color: T.gray, lineHeight: 1.6, marginBottom: 10 }}>{l.description}</p>}
-                      {l.expires_at && <Countdown expiresAt={l.expires_at} />}
+                      {l.starts_at && notStarted && <div style={{ marginBottom: 10 }}><StartsInCountdown startsAt={l.starts_at} subtitle="STORE SALE OPENS WHEN COUNTDOWN ENDS" /></div>}
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                        {l.expires_at && <Countdown expiresAt={l.expires_at} label="ENDS IN" />}
+                        {ended && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.burn}10`, border: `1px solid ${T.burn}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🔴</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.burn, letterSpacing: 1 }}>ENDED</span></div>}
+                        {!ended && !soldOut && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
+                      </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "10px 0" }}>
                         <div style={{ fontSize: 18, fontWeight: 900, fontFamily: "monospace", color: T.cum }}>{l.price_cum} <span style={{ fontSize: 10, opacity: 0.6 }}>$CUM</span></div>
-                        <div style={{ fontSize: 10, fontFamily: "monospace", color: l.remaining_spots <= 3 ? T.burn : T.grayD }}>{l.remaining_spots}/{l.total_spots} left</div>
+                        <div style={{ textAlign: "right" }}><div style={{ fontSize: 10, fontFamily: "monospace", color: l.remaining_spots <= 3 ? T.burn : T.grayD }}>{l.remaining_spots}/{l.total_spots} left</div>{(l.max_per_wallet || 1) > 1 && <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>max {l.max_per_wallet}/wallet</div>}</div>
                       </div>
                       <div style={{ height: 3, background: T.grayK, borderRadius: 2, marginBottom: 12, overflow: "hidden" }}><div style={{ height: "100%", width: `${((l.total_spots - l.remaining_spots) / l.total_spots) * 100}%`, background: l.remaining_spots <= 3 ? T.burn : T.accent, borderRadius: 2 }} /></div>
                       {buyingId === l.id ? (
@@ -534,11 +544,11 @@ export default function StakePage() {
                           </div>
                         </div>
                       ) : (
-                        <button onClick={() => { if (!isConnected) { showMsg("Connect wallet first", "err"); return; } if (cumBalance < l.price_cum) { showMsg(`Need ${l.price_cum} $CUM`, "err"); return; } setBuyingId(l.id); }} disabled={l.remaining_spots <= 0} style={{ width: "100%", background: l.remaining_spots <= 0 ? T.grayK : T.accent, color: T.bg, border: "none", borderRadius: 8, padding: "10px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: l.remaining_spots <= 0 ? "not-allowed" : "pointer" }}>{l.remaining_spots <= 0 ? "SOLD OUT" : "BUY WL SPOT"}</button>
+                        <button onClick={() => { if (!isConnected) { showMsg("Connect wallet first", "err"); return; } if (notStarted) { showMsg("Sale has not started yet", "err"); return; } if (ended) { showMsg("Sale has ended", "err"); return; } if (cumBalance < l.price_cum) { showMsg(`Need ${l.price_cum} $CUM`, "err"); return; } setBuyingId(l.id); }} disabled={buyDisabled} style={{ width: "100%", background: buyDisabled ? T.grayK : T.accent, color: T.bg, border: "none", borderRadius: 8, padding: "10px", fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: buyDisabled ? "not-allowed" : "pointer" }}>{notStarted ? "COMING SOON" : ended ? "ENDED" : soldOut ? "SOLD OUT" : "BUY WL SPOT"}</button>
                       )}
                     </div>
                   </div>
-                ))}
+                );})}
               </div>
             )}
             {myPurchases.length > 0 && (
@@ -670,9 +680,11 @@ export default function StakePage() {
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>PROJECT URL</label><input value={newListing.projectUrl} onChange={e => setNewListing(p => ({ ...p, projectUrl: e.target.value }))} style={inputStyle} placeholder="https://..." /></div>
                 <div style={{ gridColumn: "1 / -1" }}><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>DESCRIPTION</label><input value={newListing.description} onChange={e => setNewListing(p => ({ ...p, description: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>IMAGE URL</label><input value={newListing.imageUrl} onChange={e => setNewListing(p => ({ ...p, imageUrl: e.target.value }))} style={inputStyle} /></div>
+                <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>STARTS AT (countdown to open)</label><input type="datetime-local" value={newListing.startsAt} onChange={e => setNewListing(p => ({ ...p, startsAt: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>EXPIRES AT</label><input type="datetime-local" value={newListing.expiresAt} onChange={e => setNewListing(p => ({ ...p, expiresAt: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>PRICE ($CUM) *</label><input type="number" value={newListing.priceCum} onChange={e => setNewListing(p => ({ ...p, priceCum: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>SPOTS *</label><input type="number" value={newListing.totalSpots} onChange={e => setNewListing(p => ({ ...p, totalSpots: e.target.value }))} style={inputStyle} /></div>
+                <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>MAX PER WALLET</label><input type="number" min="1" value={newListing.maxPerWallet} onChange={e => setNewListing(p => ({ ...p, maxPerWallet: e.target.value }))} style={inputStyle} placeholder="1" /></div>
               </div>
               <button onClick={handleCreateListing} disabled={!newListing.title} style={{ marginTop: 12, background: T.accent, color: T.bg, border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 11, fontWeight: 800, fontFamily: "monospace", cursor: "pointer" }}>CREATE LISTING</button>
             </div>
@@ -683,7 +695,7 @@ export default function StakePage() {
                 <h3 style={{ fontSize: 13, fontWeight: 800, fontFamily: "monospace", color: T.white, letterSpacing: 2, marginBottom: 12 }}>STORE LISTINGS</h3>
                 {adminData.listings.map((l: any) => (
                   <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${T.border}`, fontSize: 10, fontFamily: "monospace", flexWrap: "wrap", gap: 6 }}>
-                    <div><span style={{ color: T.white, fontWeight: 700 }}>{l.title}</span>{!l.is_active && <span style={{ color: T.burn, fontSize: 8, marginLeft: 6 }}>(OFF)</span>}<div style={{ fontSize: 8, color: T.grayD }}>Price: {l.price_cum} $CUM • {l.remaining_spots}/{l.total_spots} left</div></div>
+                    <div><span style={{ color: T.white, fontWeight: 700 }}>{l.title}</span>{!l.is_active && <span style={{ color: T.burn, fontSize: 8, marginLeft: 6 }}>(OFF)</span>}<div style={{ fontSize: 8, color: T.grayD }}>Price: {l.price_cum} $CUM • {l.remaining_spots}/{l.total_spots} left • Max/wallet: {l.max_per_wallet || 1}</div></div>
                     {l.is_active && <button onClick={() => handleDeleteListing(l.id, l.title)} style={{ background: `${T.burn}15`, border: `1px solid ${T.burn}40`, borderRadius: 6, padding: "4px 10px", color: T.burn, fontSize: 8, fontFamily: "monospace", fontWeight: 700, cursor: "pointer" }}>🗑 DELETE</button>}
                   </div>
                 ))}

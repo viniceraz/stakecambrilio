@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { wallet, title, description, imageUrl, projectUrl, priceCum, totalSpots, expiresAt } = body;
+    const { wallet, title, description, imageUrl, projectUrl, priceCum, totalSpots, startsAt, expiresAt, maxPerWallet } = body;
     if (!wallet || !(await isAdmin(wallet))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
@@ -46,7 +46,9 @@ export async function POST(req: NextRequest) {
       price_cum: parseInt(priceCum),
       total_spots: parseInt(totalSpots),
       remaining_spots: parseInt(totalSpots),
+      starts_at: startsAt || null,
       expires_at: expiresAt || null,
+      max_per_wallet: parseInt(maxPerWallet) || 1,
     }).select().single();
     if (error) throw error;
     return NextResponse.json({ success: true, listing: data });
