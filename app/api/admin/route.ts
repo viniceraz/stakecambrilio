@@ -30,14 +30,36 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { wallet, title, description, imageUrl, projectUrl, priceCum, totalSpots, startsAt, expiresAt, maxPerWallet } = body;
+    const {
+      wallet,
+      title,
+      description,
+      imageUrl,
+      projectUrl,
+      priceCum,
+      totalSpots,
+      startsAt,
+      expiresAt,
+      maxPerWallet,
+      // WL project metadata
+      isWlProject,
+      wlMintPrice,
+      wlChain,
+      wlSupply,
+      wlDescription,
+    } = body;
     if (!wallet || !(await isAdmin(wallet))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
     if (!title || !priceCum || !totalSpots) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
+
     const sb = getServiceSupabase();
+
+    const isWl = !!isWlProject;
+    const chain = typeof wlChain === "string" && wlChain.length > 0 ? wlChain : null;
+
     const { data, error } = await sb.from("store_listings").insert({
       title,
       description: description || "",
@@ -49,6 +71,12 @@ export async function POST(req: NextRequest) {
       starts_at: startsAt || null,
       expires_at: expiresAt || null,
       max_per_wallet: parseInt(maxPerWallet) || 1,
+      // WL project metadata (optional, for WL listings)
+      is_wl_project: isWl,
+      wl_mint_price: isWl && wlMintPrice != null && wlMintPrice !== "" ? wlMintPrice : null,
+      wl_chain: isWl ? chain : null,
+      wl_supply: isWl && wlSupply != null && wlSupply !== "" ? parseInt(wlSupply) : null,
+      wl_description: isWl && wlDescription ? wlDescription : null,
     }).select().single();
     if (error) throw error;
     return NextResponse.json({ success: true, listing: data });

@@ -18,7 +18,27 @@ const T = {
 
 // ═══ INTERFACES ═══
 interface LeaderEntry { wallet: string; staked: number; balance: number; earned: number; }
-interface StoreListing { id: number; title: string; description: string; image_url: string; project_url: string; price_cum: number; total_spots: number; remaining_spots: number; is_active: boolean; created_at: string; starts_at: string | null; expires_at: string | null; max_per_wallet?: number; }
+interface StoreListing {
+  id: number;
+  title: string;
+  description: string;
+  image_url: string;
+  project_url: string;
+  price_cum: number;
+  total_spots: number;
+  remaining_spots: number;
+  is_active: boolean;
+  created_at: string;
+  starts_at: string | null;
+  expires_at: string | null;
+  max_per_wallet?: number;
+  // Optional WL project metadata (for multi-chain WL support)
+  is_wl_project?: boolean;
+  wl_mint_price?: number | string | null;
+  wl_chain?: "BTC" | "SOL" | "ETH" | null;
+  wl_supply?: number | null;
+  wl_description?: string | null;
+}
 interface Purchase { id: number; listing_id: number; buyer_wallet: string; wl_wallet: string; cum_spent: number; purchased_at: string; store_listings?: { title: string }; }
 interface BurnReward { id: number; title: string; description: string; image_url: string; burn_cost: number; total_supply: number; remaining_supply: number; is_active: boolean; created_at: string; expires_at: string | null; starts_at: string | null; }
 interface BurnClaim { id: number; reward_id: number; wallet_address: string; token_ids: string[]; tx_hashes: string[]; status: string; admin_notes: string; submitted_at: string; burn_rewards?: { title: string; image_url: string }; }
@@ -28,19 +48,33 @@ const PS: React.CSSProperties = { background: T.bgS, border: `1px solid ${T.bord
 const inputStyle: React.CSSProperties = { width: "100%", background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "10px 12px", color: T.white, fontSize: 12, fontFamily: "monospace", outline: "none", boxSizing: "border-box" };
 const shortAddr = (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 
+// Normalize timestamps coming from Supabase so that values
+// saved via <input type=\"datetime-local\" /> behave as local time
+// independent of the server/database timezone.
+const parseLocalTimestamp = (value: string) => {
+  if (!value) return null;
+  // Drop timezone/offset (Z or +00:00 etc.) so JS treats it as local time
+  const cleaned = value.replace(/([+-]\d{2}:?\d{2}|Z)$/i, "");
+  const d = new Date(cleaned);
+  if (isNaN(d.getTime())) return null;
+  return d;
+};
+
 // ═══ COUNTDOWN COMPONENT ═══
 function Countdown({ expiresAt, label }: { expiresAt: string; label?: string }) {
   const [left, setLeft] = useState("");
   const [expired, setExpired] = useState(false);
   useEffect(() => {
     const update = () => {
-      const diff = new Date(expiresAt).getTime() - Date.now();
+      const dt = parseLocalTimestamp(expiresAt);
+      if (!dt) { setExpired(true); setLeft("EXPIRED"); return; }
+      const diff = dt.getTime() - Date.now();
       if (diff <= 0) { setExpired(true); setLeft("EXPIRED"); return; }
-      const d = Math.floor(diff / 86400000);
+      const days = Math.floor(diff / 86400000);
       const h = Math.floor((diff % 86400000) / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
-      setLeft(`${d > 0 ? d + "d " : ""}${h.toString().padStart(2, "0")}h ${m.toString().padStart(2, "0")}m ${s.toString().padStart(2, "0")}s`);
+      setLeft(`${days > 0 ? days + "d " : ""}${h.toString().padStart(2, "0")}h ${m.toString().padStart(2, "0")}m ${s.toString().padStart(2, "0")}s`);
     };
     update();
     const id = setInterval(update, 1000);
@@ -61,13 +95,15 @@ function StartsInCountdown({ startsAt, subtitle }: { startsAt: string; subtitle?
   const [started, setStarted] = useState(false);
   useEffect(() => {
     const update = () => {
-      const diff = new Date(startsAt).getTime() - Date.now();
+      const dt = parseLocalTimestamp(startsAt);
+      if (!dt) { setStarted(true); return; }
+      const diff = dt.getTime() - Date.now();
       if (diff <= 0) { setStarted(true); return; }
-      const d = Math.floor(diff / 86400000);
+      const days = Math.floor(diff / 86400000);
       const h = Math.floor((diff % 86400000) / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
-      setLeft(`${d > 0 ? d + "d " : ""}${h.toString().padStart(2, "0")}h ${m.toString().padStart(2, "0")}m ${s.toString().padStart(2, "0")}s`);
+      setLeft(`${days > 0 ? days + "d " : ""}${h.toString().padStart(2, "0")}h ${m.toString().padStart(2, "0")}m ${s.toString().padStart(2, "0")}s`);
     };
     update();
     const id = setInterval(update, 1000);
@@ -137,7 +173,23 @@ export default function StakePage() {
   // Admin
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminData, setAdminData] = useState<any>(null);
-  const [newListing, setNewListing] = useState({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", startsAt: "", expiresAt: "", maxPerWallet: "1" });
+  const [newListing, setNewListing] = useState({
+    title: "",
+    description: "",
+    imageUrl: "",
+    projectUrl: "",
+    priceCum: "5",
+    totalSpots: "20",
+    startsAt: "",
+    expiresAt: "",
+    maxPerWallet: "1",
+    // WL project metadata
+    isWlProject: true,
+    wlMintPrice: "",
+    wlChain: "ETH" as "BTC" | "SOL" | "ETH",
+    wlSupply: "",
+    wlDescription: "",
+  });
   const [newBurnReward, setNewBurnReward] = useState({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" });
 
   // Mobile menu
@@ -237,9 +289,45 @@ export default function StakePage() {
   };
 
   // ═══ STORE HANDLERS ═══
-  const handleBuy = async (listingId: number) => {
-    if (!address || !wlWalletInput) return; setStaking(true);
-    try { const res = await fetch("/api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, listingId, wlWallet: wlWalletInput }) }); const data = await res.json(); if (data.success) { showMsg(`WL purchased! Spent ${data.spent} $CUM`); setBuyingId(null); setWlWalletInput(""); await loadUserData(); await loadStore(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); } finally { setStaking(false); }
+  const validateWlAddressClient = (chain: string, addr: string): string | null => {
+    const v = (addr || "").trim();
+    if (!v) return "WL wallet address is required";
+    if (chain === "SOL") {
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)) return "Invalid SOL address format";
+      return null;
+    }
+    if (chain === "BTC") {
+      if (!/^bc1[0-9a-z]{25,80}$/.test(v)) return "Invalid BTC Ordinals address format";
+      return null;
+    }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(v)) return "Invalid ETH address format";
+    return null;
+  };
+
+  const handleBuy = async (listing: StoreListing) => {
+    if (!address || !wlWalletInput) return;
+    const chain = listing.is_wl_project ? (listing.wl_chain || "ETH") : "ETH";
+    const validationError = validateWlAddressClient(chain, wlWalletInput);
+    if (validationError) {
+      showMsg(validationError, "err");
+      return;
+    }
+    setStaking(true);
+    try {
+      const res = await fetch("/api/store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: address, listingId: listing.id, wlWallet: wlWalletInput }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showMsg(`WL purchased! Spent ${data.spent} $CUM`);
+        setBuyingId(null);
+        setWlWalletInput("");
+        await loadUserData();
+        await loadStore();
+      } else showMsg(data.error, "err");
+    } catch (err: any) { showMsg(err.message, "err"); } finally { setStaking(false); }
   };
 
   const handleDeleteListing = async (id: number, title: string) => {
@@ -271,7 +359,43 @@ export default function StakePage() {
   // ═══ ADMIN HANDLERS ═══
   const handleCreateListing = async () => {
     if (!address) return;
-    try { const res = await fetch("/api/admin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, ...newListing, startsAt: newListing.startsAt || null, expiresAt: newListing.expiresAt || null }) }); const data = await res.json(); if (data.success) { showMsg(`Listing created!`); setNewListing({ title: "", description: "", imageUrl: "", projectUrl: "", priceCum: "5", totalSpots: "20", startsAt: "", expiresAt: "", maxPerWallet: "1" }); await loadStore(); await loadAdminData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); }
+    try {
+      const payload = {
+        wallet: address,
+        ...newListing,
+        startsAt: newListing.startsAt || null,
+        expiresAt: newListing.expiresAt || null,
+        // Ensure wlChain is null when not WL project
+        wlChain: newListing.isWlProject ? newListing.wlChain : null,
+      };
+      const res = await fetch("/api/admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showMsg(`Listing created!`);
+        setNewListing({
+          title: "",
+          description: "",
+          imageUrl: "",
+          projectUrl: "",
+          priceCum: "5",
+          totalSpots: "20",
+          startsAt: "",
+          expiresAt: "",
+          maxPerWallet: "1",
+          isWlProject: true,
+          wlMintPrice: "",
+          wlChain: "ETH",
+          wlSupply: "",
+          wlDescription: "",
+        });
+        await loadStore();
+        await loadAdminData();
+      } else showMsg(data.error, "err");
+    } catch (err: any) { showMsg(err.message, "err"); }
   };
 
   const handleCreateBurnReward = async () => {
@@ -302,7 +426,12 @@ export default function StakePage() {
   const listedNfts = ownedNfts.filter(n => listedIds.has(n.tokenId));
 
   // Check if listing/reward is expired
-  const isExpired = (expiresAt: string | null) => expiresAt ? new Date(expiresAt).getTime() <= Date.now() : false;
+  const isExpired = (expiresAt: string | null) => {
+    if (!expiresAt) return false;
+    const d = parseLocalTimestamp(expiresAt);
+    if (!d) return false;
+    return d.getTime() <= Date.now();
+  };
   const RECENT_ALERT_WINDOW_MS = 48 * 60 * 60 * 1000;
   const nowTs = Date.now();
   const newStoreTitles = listings
@@ -555,7 +684,7 @@ export default function StakePage() {
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
                 {listings.filter(l => l.is_active).map(l => {
-                  const notStarted = l.starts_at ? new Date(l.starts_at).getTime() > Date.now() : false;
+                  const notStarted = l.starts_at ? (() => { const d = parseLocalTimestamp(l.starts_at!); return d ? d.getTime() > Date.now() : false; })() : false;
                   const ended = isExpired(l.expires_at);
                   const soldOut = l.remaining_spots <= 0;
                   const buyDisabled = soldOut || ended || notStarted;
@@ -571,6 +700,23 @@ export default function StakePage() {
                         {ended && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.burn}10`, border: `1px solid ${T.burn}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🔴</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.burn, letterSpacing: 1 }}>ENDED</span></div>}
                         {!ended && !soldOut && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
                       </div>
+                      {l.is_wl_project && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10, fontSize: 9, fontFamily: "monospace" }}>
+                          <span style={{ padding: "3px 8px", borderRadius: 999, background: `${T.accent}15`, border: `1px solid ${T.accent}40`, color: T.accent, fontWeight: 800 }}>
+                            WL • {l.wl_chain || "ETH"}
+                          </span>
+                          {l.wl_mint_price && (
+                            <span style={{ padding: "3px 8px", borderRadius: 999, background: `${T.grayK}30`, border: `1px solid ${T.border}`, color: T.gray }}>
+                              Mint: {l.wl_mint_price}
+                            </span>
+                          )}
+                          {typeof l.wl_supply === "number" && (
+                            <span style={{ padding: "3px 8px", borderRadius: 999, background: `${T.grayK}30`, border: `1px solid ${T.border}`, color: T.gray }}>
+                              Supply: {l.wl_supply}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "10px 0" }}>
                         <div style={{ fontSize: 18, fontWeight: 900, fontFamily: "monospace", color: T.cum }}>{l.price_cum} <span style={{ fontSize: 10, opacity: 0.6 }}>$CUM</span></div>
                         <div style={{ textAlign: "right" }}><div style={{ fontSize: 10, fontFamily: "monospace", color: l.remaining_spots <= 3 ? T.burn : T.grayD }}>{l.remaining_spots}/{l.total_spots} left</div>{(l.max_per_wallet || 1) > 1 && <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>max {l.max_per_wallet}/wallet</div>}</div>
@@ -579,10 +725,16 @@ export default function StakePage() {
                       {buyingId === l.id ? (
                         <div>
                           <label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>WL WALLET ADDRESS</label>
-                          <input type="text" placeholder="0x..." value={wlWalletInput} onChange={e => setWlWalletInput(e.target.value)} style={{ ...inputStyle, marginBottom: 8, marginTop: 4 }} />
+                          <input
+                            type="text"
+                            placeholder={l.is_wl_project ? (l.wl_chain === "SOL" ? "Solana address" : l.wl_chain === "BTC" ? "bc1..." : "0x...") : "0x..."}
+                            value={wlWalletInput}
+                            onChange={e => setWlWalletInput(e.target.value)}
+                            style={{ ...inputStyle, marginBottom: 8, marginTop: 4 }}
+                          />
                           {isConnected && <button onClick={() => setWlWalletInput(address!)} style={{ background: "none", border: "none", color: T.accent, fontSize: 8, fontFamily: "monospace", cursor: "pointer", padding: 0, marginBottom: 8 }}>↑ Use connected wallet</button>}
                           <div style={{ display: "flex", gap: 6 }}>
-                            <button onClick={() => handleBuy(l.id)} disabled={staking || !wlWalletInput} style={{ flex: 1, background: T.cum, color: T.bg, border: "none", borderRadius: 8, padding: "8px", fontSize: 11, fontWeight: 800, fontFamily: "monospace", cursor: "pointer" }}>CONFIRM</button>
+                            <button onClick={() => handleBuy(l)} disabled={staking || !wlWalletInput} style={{ flex: 1, background: T.cum, color: T.bg, border: "none", borderRadius: 8, padding: "8px", fontSize: 11, fontWeight: 800, fontFamily: "monospace", cursor: "pointer" }}>CONFIRM</button>
                             <button onClick={() => { setBuyingId(null); setWlWalletInput(""); }} style={{ background: T.grayK, color: T.white, border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 11, fontFamily: "monospace", cursor: "pointer" }}>✕</button>
                           </div>
                         </div>
@@ -623,7 +775,7 @@ export default function StakePage() {
                   const txInputs = burnTxInputs[reward.id] || [""];
                   const isSoldOut = reward.remaining_supply <= 0;
                   const isClaimed = !!myClaim;
-                  const notStarted = reward.starts_at ? new Date(reward.starts_at).getTime() > Date.now() : false;
+                  const notStarted = reward.starts_at ? (() => { const d = parseLocalTimestamp(reward.starts_at!); return d ? d.getTime() > Date.now() : false; })() : false;
                   return (
                     <div key={reward.id} style={{ background: T.card, border: `1px solid ${isClaimed ? T.success + "40" : T.border}`, borderRadius: 14, overflow: "hidden" }}>
                       {reward.image_url && <img src={reward.image_url} alt={reward.title} style={{ width: "100%", height: "auto", maxHeight: 1000, objectFit: "contain" }} />}
@@ -722,6 +874,37 @@ export default function StakePage() {
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>TITLE *</label><input value={newListing.title} onChange={e => setNewListing(p => ({ ...p, title: e.target.value }))} style={inputStyle} placeholder="Project WL" /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>PROJECT URL</label><input value={newListing.projectUrl} onChange={e => setNewListing(p => ({ ...p, projectUrl: e.target.value }))} style={inputStyle} placeholder="https://..." /></div>
                 <div style={{ gridColumn: "1 / -1" }}><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>DESCRIPTION</label><input value={newListing.description} onChange={e => setNewListing(p => ({ ...p, description: e.target.value }))} style={inputStyle} /></div>
+                <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    id="is-wl-project"
+                    type="checkbox"
+                    checked={newListing.isWlProject}
+                    onChange={e => setNewListing(p => ({ ...p, isWlProject: e.target.checked }))}
+                    style={{ width: 14, height: 14, cursor: "pointer" }}
+                  />
+                  <label htmlFor="is-wl-project" style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, cursor: "pointer" }}>
+                    Listing é WL de projeto (BTC Ordinals / SOL / ETH)
+                  </label>
+                </div>
+                {newListing.isWlProject && (
+                  <>
+                    <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>MINT PRICE</label><input value={newListing.wlMintPrice} onChange={e => setNewListing(p => ({ ...p, wlMintPrice: e.target.value }))} style={inputStyle} placeholder="ex: 0.1 ETH" /></div>
+                    <div>
+                      <label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>CHAIN *</label>
+                      <select
+                        value={newListing.wlChain}
+                        onChange={e => setNewListing(p => ({ ...p, wlChain: e.target.value as "BTC" | "SOL" | "ETH" }))}
+                        style={{ ...inputStyle, paddingRight: 24 }}
+                      >
+                        <option value="ETH">ETH</option>
+                        <option value="SOL">SOL</option>
+                        <option value="BTC">BTC (Ordinals)</option>
+                      </select>
+                    </div>
+                    <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>SUPPLY</label><input type="number" value={newListing.wlSupply} onChange={e => setNewListing(p => ({ ...p, wlSupply: e.target.value }))} style={inputStyle} placeholder="ex: 555" /></div>
+                    <div style={{ gridColumn: "1 / -1" }}><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>WL DESCRIPTION</label><input value={newListing.wlDescription} onChange={e => setNewListing(p => ({ ...p, wlDescription: e.target.value }))} style={inputStyle} placeholder="Details about WL / mint mechanics" /></div>
+                  </>
+                )}
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>IMAGE URL</label><input value={newListing.imageUrl} onChange={e => setNewListing(p => ({ ...p, imageUrl: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>STARTS AT (countdown to open)</label><input type="datetime-local" value={newListing.startsAt} onChange={e => setNewListing(p => ({ ...p, startsAt: e.target.value }))} style={inputStyle} /></div>
                 <div><label style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>EXPIRES AT</label><input type="datetime-local" value={newListing.expiresAt} onChange={e => setNewListing(p => ({ ...p, expiresAt: e.target.value }))} style={inputStyle} /></div>

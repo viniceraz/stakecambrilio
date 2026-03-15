@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServiceSupabase } from "@/lib/supabase";
 
+// Treat timestamps saved via <input type="datetime-local" /> as local time,
+// ignoring any timezone suffix that may have been added when stored.
+const parseLocalTimestamp = (value: string | null) => {
+  if (!value) return null;
+  const cleaned = value.replace(/([+-]\d{2}:?\d{2}|Z)$/i, "");
+  const d = new Date(cleaned);
+  if (isNaN(d.getTime())) return null;
+  return d;
+};
+
 // GET: list active store items
 export async function GET() {
   try {
@@ -27,16 +37,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing wallet, listingId, or wlWallet" }, { status: 400 });
     }
 
-    // Validate wlWallet format
-    if (!/^0x[a-fA-F0-9]{40}$/.test(wlWallet)) {
-      return NextResponse.json({ error: "Invalid WL wallet address format" }, { status: 400 });
-    }
-
     const w = wallet.toLowerCase();
-    const wlw = wlWallet.toLowerCase();
     const sb = getServiceSupabase();
 
-    // Get listing
+    // Get listing (includes WL metadata / chain)
     const { data: listing } = await sb
       .from("store_listings")
       .select("*")
@@ -48,11 +52,49 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Listing not found or inactive" }, { status: 404 });
     }
 
+    const isWlProject = (listing as any).is_wl_project === true;
+    const wlChain: string = (listing as any).wl_chain || "ETH";
+
+    const validateWlAddress = (chain: string, addr: string): string | null => {
+      const v = (addr || "").trim();
+      if (!v) return "WL wallet address is required";
+      if (chain === "SOL") {
+        // Basic Solana base58 check (length + charset)
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)) {
+          return "Invalid SOL address format";
+        }
+        return null;
+      }
+      if (chain === "BTC") {
+        // Simple bech32 Ordinals-style address (bc1...)
+        if (!/^bc1[0-9a-z]{25,80}$/.test(v)) {
+          return "Invalid BTC Ordinals address format";
+        }
+        return null;
+      }
+      // Default: ETH
+      if (!/^0x[a-fA-F0-9]{40}$/.test(v)) {
+        return "Invalid ETH address format";
+      }
+      return null;
+    };
+
+    const validationError = validateWlAddress(isWlProject ? wlChain : "ETH", wlWallet);
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 });
+    }
+
+    // Normalize WL wallet for storage / uniqueness
+    const rawWl = wlWallet.trim();
+    const wlw = isWlProject && wlChain !== "ETH" ? rawWl : rawWl.toLowerCase();
+
     const now = Date.now();
-    if (listing.starts_at && new Date(listing.starts_at).getTime() > now) {
+    const startsAt = listing.starts_at ? parseLocalTimestamp(listing.starts_at as any) : null;
+    const expiresAt = listing.expires_at ? parseLocalTimestamp(listing.expires_at as any) : null;
+    if (startsAt && startsAt.getTime() > now) {
       return NextResponse.json({ error: "Sale has not started yet" }, { status: 400 });
     }
-    if (listing.expires_at && new Date(listing.expires_at).getTime() <= now) {
+    if (expiresAt && expiresAt.getTime() <= now) {
       return NextResponse.json({ error: "Sale has ended" }, { status: 400 });
     }
 
