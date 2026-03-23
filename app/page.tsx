@@ -415,6 +415,27 @@ export default function StakePage() {
     try { const res = await fetch("/api/admin", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address, setting: { key: "transfer_enabled", value: String(newVal) } }) }); const data = await res.json(); if (data.success) { setTransferEnabled(newVal); showMsg(`$CUM Transfer ${newVal ? "ENABLED" : "DISABLED"}`); } } catch (err: any) { showMsg(err.message, "err"); }
   };
 
+  const handleRecoverStakes = async () => {
+    if (!address) return;
+    if (!confirm("Isso vai restaurar todas as stakes removidas por API quebrada e re-verificar ownership. Continuar?")) return;
+    try {
+      showMsg("Restaurando stakes...");
+      const res = await fetch("/api/recover-stakes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: address }) });
+      const data = await res.json();
+      if (data.error) { showMsg(data.error, "err"); return; }
+      showMsg(`${data.message}`);
+      // Now trigger re-verify to check real ownership with new API key
+      setTimeout(async () => {
+        showMsg("Re-verificando ownership com nova API...");
+        const vRes = await fetch("/api/verify", { method: "POST" });
+        const vData = await vRes.json();
+        if (vData.error) { showMsg(vData.error, "err"); return; }
+        showMsg(`Verificação completa: ${vData.verified} válidos, ${vData.removed} removidos`);
+        loadLeaderboard();
+      }, 1000);
+    } catch (err: any) { showMsg(err.message, "err"); }
+  };
+
   const updateBurnTxInput = (rid: number, idx: number, val: string) => setBurnTxInputs(prev => { const a = [...(prev[rid] || [""])]; a[idx] = val; return { ...prev, [rid]: a }; });
   const addTxField = (rid: number) => setBurnTxInputs(prev => { const a = [...(prev[rid] || [""]), ""]; return { ...prev, [rid]: a }; });
   const removeTxField = (rid: number, idx: number) => setBurnTxInputs(prev => { const a = [...(prev[rid] || [])]; a.splice(idx, 1); if (a.length === 0) a.push(""); return { ...prev, [rid]: a }; });
@@ -776,6 +797,8 @@ export default function StakePage() {
                   const isSoldOut = reward.remaining_supply <= 0;
                   const isClaimed = !!myClaim;
                   const notStarted = reward.starts_at ? (() => { const d = parseLocalTimestamp(reward.starts_at!); return d ? d.getTime() > Date.now() : false; })() : false;
+                  const isRewardExpired = isExpired(reward.expires_at);
+                  const isEnded = isSoldOut || isRewardExpired;
                   return (
                     <div key={reward.id} style={{ background: T.card, border: `1px solid ${isClaimed ? T.success + "40" : T.border}`, borderRadius: 14, overflow: "hidden" }}>
                       {reward.image_url && <img src={reward.image_url} alt={reward.title} style={{ width: "100%", height: "auto", maxHeight: 1000, objectFit: "contain" }} />}
@@ -785,8 +808,8 @@ export default function StakePage() {
                         {reward.starts_at && notStarted && <div style={{ marginBottom: 10 }}><StartsInCountdown startsAt={reward.starts_at} /></div>}
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                           {reward.expires_at && <Countdown expiresAt={reward.expires_at} label="ENDS IN" />}
-                          {isSoldOut && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.burn}10`, border: `1px solid ${T.burn}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🔴</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.burn, letterSpacing: 1 }}>ENDED</span></div>}
-                          {!isSoldOut && reward.starts_at && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
+                          {isEnded && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.burn}10`, border: `1px solid ${T.burn}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🔴</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.burn, letterSpacing: 1 }}>ENDED</span></div>}
+                          {!isEnded && reward.starts_at && !notStarted && <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", background: `${T.success}10`, border: `1px solid ${T.success}30`, borderRadius: 8 }}><span style={{ fontSize: 10 }}>🟢</span><span style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: T.success, letterSpacing: 1 }}>LIVE</span></div>}
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                           <div><div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>BURN COST</div><div style={{ fontSize: 20, fontWeight: 900, fontFamily: "monospace", color: T.burn }}>{reward.burn_cost} <span style={{ fontSize: 10, opacity: 0.7 }}>NFTs</span></div></div>
@@ -794,7 +817,7 @@ export default function StakePage() {
                         </div>
                         <div style={{ height: 3, background: T.grayK, borderRadius: 2, marginBottom: 14, overflow: "hidden" }}><div style={{ height: "100%", width: `${((reward.total_supply - reward.remaining_supply) / reward.total_supply) * 100}%`, background: reward.remaining_supply <= 1 ? T.burn : T.accent, borderRadius: 2 }} /></div>
                         {isClaimed && <div style={{ padding: "8px 12px", borderRadius: 8, marginBottom: 10, background: myClaim.status === "delivered" ? `${T.success}15` : `${T.sweep}15`, border: `1px solid ${myClaim.status === "delivered" ? T.success : T.sweep}30` }}><div style={{ fontSize: 10, fontWeight: 800, fontFamily: "monospace", color: myClaim.status === "delivered" ? T.success : T.sweep }}>{myClaim.status === "delivered" ? "✅ DELIVERED" : "⏳ AWAITING DELIVERY"}</div><div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginTop: 3 }}>Burned: {myClaim.token_ids.map(id => `#${id}`).join(", ")}</div></div>}
-                        {!isClaimed && !isSoldOut && isConnected && !notStarted && (
+                        {!isClaimed && !isEnded && isConnected && !notStarted && (
                           isActive ? (
                             <div>
                               <div style={{ fontSize: 9, fontFamily: "monospace", color: T.gray, marginBottom: 8, padding: "6px 8px", background: T.bgS, borderRadius: 6, border: `1px solid ${T.border}`, lineHeight: 1.7 }}>1. Transfer {reward.burn_cost} NFTs to <span style={{ color: T.burn }}>0x...dEaD</span><br />2. Paste TX hash(es) below (bulk OK)</div>
@@ -865,6 +888,12 @@ export default function StakePage() {
             <div style={{ ...PS, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
               <div><div style={{ fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: T.white }}>$CUM TRANSFER</div><div style={{ fontSize: 9, color: T.grayD, fontFamily: "monospace" }}>Enable or disable $CUM transfers between wallets</div></div>
               <button onClick={toggleTransferEnabled} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: transferEnabled ? T.success : T.burn, color: T.bg, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>{transferEnabled ? "ON ✓" : "OFF ✕"}</button>
+            </div>
+
+            {/* Recover stakes (after broken API key) */}
+            <div style={{ ...PS, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, border: `1px solid ${T.burn}40` }}>
+              <div><div style={{ fontSize: 12, fontWeight: 800, fontFamily: "monospace", color: T.burn }}>RECOVERY DE STAKES</div><div style={{ fontSize: 9, color: T.grayD, fontFamily: "monospace" }}>Restaura stakes removidas por API key quebrada e re-verifica ownership</div></div>
+              <button onClick={handleRecoverStakes} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: T.burn, color: T.white, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>RECUPERAR</button>
             </div>
 
             {/* Create store listing */}
