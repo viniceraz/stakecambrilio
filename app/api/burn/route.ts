@@ -7,7 +7,7 @@ const BURN_ADDRESSES = [
   "0x0000000000000000000000000000000000000001",
 ];
 const NFT_CONTRACT = (process.env.NEXT_PUBLIC_NFT_CONTRACT || "").toLowerCase();
-const ALC_RPC = `https://base-mainnet.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_KEY}`;
+const ALC_RPC = "https://base-mainnet.g.alchemy.com/v2/Th1sSdMq3_Pi8ukOmUwyw";
 
 // ERC721 Transfer(address,address,uint256) event signature
 const TRANSFER_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";

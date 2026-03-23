@@ -1,4 +1,4 @@
-const ALC_KEY = process.env.NEXT_PUBLIC_ALCHEMY_KEY || "";
+const ALC_KEY = "Th1sSdMq3_Pi8ukOmUwyw";
 const ALC_NFT = `https://base-mainnet.g.alchemy.com/nft/v3/${ALC_KEY}`;
 const ALC_RPC = `https://base-mainnet.g.alchemy.com/v2/${ALC_KEY}`;
 const OS_API = "https://api.opensea.io/api/v2";
