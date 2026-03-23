@@ -53,9 +53,7 @@ const shortAddr = (a: string) => `${a.slice(0, 6)}...${a.slice(-4)}`;
 // independent of the server/database timezone.
 const parseLocalTimestamp = (value: string) => {
   if (!value) return null;
-  // Drop timezone/offset (Z or +00:00 etc.) so JS treats it as local time
-  const cleaned = value.replace(/([+-]\d{2}:?\d{2}|Z)$/i, "");
-  const d = new Date(cleaned);
+  const d = new Date(value);
   if (isNaN(d.getTime())) return null;
   return d;
 };
@@ -360,11 +358,12 @@ export default function StakePage() {
   const handleCreateListing = async () => {
     if (!address) return;
     try {
+      const toUTC = (local: string) => local ? new Date(local).toISOString() : null;
       const payload = {
         wallet: address,
         ...newListing,
-        startsAt: newListing.startsAt || null,
-        expiresAt: newListing.expiresAt || null,
+        startsAt: toUTC(newListing.startsAt),
+        expiresAt: toUTC(newListing.expiresAt),
         // Ensure wlChain is null when not WL project
         wlChain: newListing.isWlProject ? newListing.wlChain : null,
       };
@@ -400,7 +399,12 @@ export default function StakePage() {
 
   const handleCreateBurnReward = async () => {
     if (!address) return;
-    try { const res = await fetch("/api/burn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create_reward", wallet: address, ...newBurnReward, expiresAt: newBurnReward.expiresAt || null, startsAt: newBurnReward.startsAt || null }) }); const data = await res.json(); if (data.success) { showMsg(`Burn reward created!`); setNewBurnReward({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" }); await loadBurnData(); } else showMsg(data.error, "err"); } catch (err: any) { showMsg(err.message, "err"); }
+    try {
+      const toUTC = (local: string) => local ? new Date(local).toISOString() : null;
+      const res = await fetch("/api/burn", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create_reward", wallet: address, ...newBurnReward, expiresAt: toUTC(newBurnReward.expiresAt), startsAt: toUTC(newBurnReward.startsAt) }) });
+      const data = await res.json();
+      if (data.success) { showMsg(`Burn reward created!`); setNewBurnReward({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" }); await loadBurnData(); } else showMsg(data.error, "err");
+    } catch (err: any) { showMsg(err.message, "err"); }
   };
 
   const toggleStakeEnabled = async () => {
@@ -713,7 +717,10 @@ export default function StakePage() {
                   <div key={l.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
                     {l.image_url && <img src={l.image_url} alt={l.title} style={{ width: "100%", height: 140, objectFit: "cover" }} />}
                     <div style={{ padding: 14 }}>
-                      <h3 style={{ fontSize: 15, fontWeight: 800, fontFamily: "monospace", color: T.white, marginBottom: 4 }}>{l.title}</h3>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <h3 style={{ fontSize: 15, fontWeight: 800, fontFamily: "monospace", color: T.white, margin: 0 }}>{l.title}</h3>
+                        {l.project_url && <a href={l.project_url} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 3, padding: "3px 8px", background: `${T.sweep}10`, border: `1px solid ${T.sweep}30`, borderRadius: 6, color: T.sweep, fontSize: 9, fontFamily: "monospace", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>🔗 LINK</a>}
+                      </div>
                       {l.description && <p style={{ fontSize: 10, color: T.gray, lineHeight: 1.6, marginBottom: 10 }}>{l.description}</p>}
                       {l.starts_at && notStarted && <div style={{ marginBottom: 10 }}><StartsInCountdown startsAt={l.starts_at} subtitle="STORE SALE OPENS WHEN COUNTDOWN ENDS" /></div>}
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
