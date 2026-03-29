@@ -1,11 +1,15 @@
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, fallback } from "viem";
 import { base } from "wagmi/chains";
 
 const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_KEY || "";
 
 export const publicClient = createPublicClient({
   chain: base,
-  transport: http(`https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`),
+  transport: fallback([
+    http(`https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`),
+    http("https://mainnet.base.org"),
+    http("https://base.llamarpc.com"),
+  ]),
 });
 
 /**

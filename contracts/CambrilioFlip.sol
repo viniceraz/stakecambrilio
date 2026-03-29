@@ -34,7 +34,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
     // ─── CHAINLINK VRF CONFIG ────────────────────────────────────
     bytes32 public immutable keyHash;
     uint256 public immutable subscriptionId;
-    uint32  public constant  CALLBACK_GAS_LIMIT    = 150_000;
+    uint32  public constant  CALLBACK_GAS_LIMIT    = 500_000;
     uint16  public constant  REQUEST_CONFIRMATIONS = 3;
 
     // ─── STATE ───────────────────────────────────────────────────
