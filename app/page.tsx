@@ -2,9 +2,15 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, useSignMessage } from "wagmi";
+import { useAccount, useSignMessage, useWriteContract } from "wagmi";
 import { getOwnedCambrilios, checkListedClient, OwnedNFT } from "@/lib/blockchain";
 import { supabase } from "@/lib/supabase";
+import { readContractSafe, publicClient } from "@/lib/viemClient";
+import {
+  BET_CONTRACT_ADDRESS, NFT_CONTRACT_ADDRESS,
+  BET_ABI, ERC721_ABI,
+  STATUS_MAP, choiceToSide, sideToChoice, ZERO_ADDRESS,
+} from "@/lib/betContract";
 
 // ═══ THEME ═══
 const T = {
@@ -42,6 +48,19 @@ interface StoreListing {
 interface Purchase { id: number; listing_id: number; buyer_wallet: string; wl_wallet: string; cum_spent: number; purchased_at: string; store_listings?: { title: string }; }
 interface BurnReward { id: number; title: string; description: string; image_url: string; burn_cost: number; total_supply: number; remaining_supply: number; is_active: boolean; created_at: string; expires_at: string | null; starts_at: string | null; }
 interface BurnClaim { id: number; reward_id: number; wallet_address: string; token_ids: string[]; tx_hashes: string[]; status: string; admin_notes: string; submitted_at: string; burn_rewards?: { title: string; image_url: string }; }
+interface BetRoom {
+  id: bigint;
+  creator_wallet: string;
+  challenger_wallet: string | null;
+  nft_count: number;
+  status: "waiting" | "active" | "flipping" | "complete" | "cancelled" | "expired";
+  creator_choice: "heads" | "tails";
+  creator_nft_ids: string[];
+  challenger_nft_ids: string[];
+  coin_result: "heads" | "tails" | null;
+  winner_wallet: string | null;
+  created_at: string;
+}
 
 // ═══ HELPERS ═══
 const PS: React.CSSProperties = { background: T.bgS, border: `1px solid ${T.border}`, borderRadius: 14, padding: 20, marginBottom: 20 };
@@ -121,9 +140,16 @@ function StartsInCountdown({ startsAt, subtitle }: { startsAt: string; subtitle?
 export default function StakePage() {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
+  // Cast to any once to work around wagmi/viem 2.18 type regression
+  // where chain+account are incorrectly required in WriteContractParameters.
+  const { writeContractAsync: _writeContractAsync } = useWriteContract();
+  const writeContractAsync = _writeContractAsync as unknown as (p: {
+    address: `0x${string}`; abi: readonly object[];
+    functionName: string; args?: unknown[];
+  }) => Promise<`0x${string}`>;
 
   // Tab
-  const [tab, setTab] = useState<"stake" | "store" | "burn" | "dashboard" | "admin">("stake");
+  const [tab, setTab] = useState<"stake" | "store" | "burn" | "dashboard" | "admin" | "bet">("stake");
 
   // Stake
   const [ownedNfts, setOwnedNfts] = useState<OwnedNFT[]>([]);
@@ -190,6 +216,22 @@ export default function StakePage() {
   });
   const [newBurnReward, setNewBurnReward] = useState({ title: "", description: "", imageUrl: "", burnCost: "10", totalSupply: "1", expiresAt: "", startsAt: "" });
 
+  // Bet
+  const [betRooms, setBetRooms] = useState<BetRoom[]>([]);
+  const [myCompletedBets, setMyCompletedBets] = useState<BetRoom[]>([]);
+  const [betNftCount, setBetNftCount] = useState<1 | 2 | 3 | "custom">(1);
+  const [betCustomCount, setBetCustomCount] = useState("");
+  const [betChoice, setBetChoice] = useState<"heads" | "tails">("heads");
+  const [betSelectedIds, setBetSelectedIds] = useState<Set<string>>(new Set());
+  const [betJoinRoomId, setBetJoinRoomId] = useState<bigint | null>(null);
+  const [betJoinSelectedIds, setBetJoinSelectedIds] = useState<Set<string>>(new Set());
+  const [creatingBet, setCreatingBet] = useState(false);
+  const [joiningBet, setJoiningBet] = useState(false);
+  const [flippingBet, setFlippingBet] = useState(false);
+  const [flipResult, setFlipResult] = useState<{ roomId: bigint; result: "heads" | "tails"; winner: string; creatorChoice: "heads" | "tails" } | null>(null);
+  const [coinAnimating, setCoinAnimating] = useState(false);
+  const [betApproved, setBetApproved] = useState(false);
+
   // Mobile menu
   const [mobileMenu, setMobileMenu] = useState(false);
 
@@ -231,11 +273,80 @@ export default function StakePage() {
   const loadStore = useCallback(async () => { try { const res = await fetch("/api/store"); const data = await res.json(); setListings(data.listings || []); } catch {} }, []);
   const loadBurnData = useCallback(async () => { try { const p = new URLSearchParams(); if (address) p.set("wallet", address); if (isAdmin) p.set("admin", "true"); const res = await fetch(`/api/burn?${p}`); const data = await res.json(); setBurnRewards(data.rewards || []); setBurnClaims(data.claims || []); setAllBurnClaims(data.allClaims || []); } catch {} }, [address, isAdmin]);
   const loadAdminData = useCallback(async () => { if (!address || !isAdmin) return; try { const res = await fetch(`/api/admin?wallet=${address}`); const data = await res.json(); setAdminData(data); } catch {} }, [address, isAdmin]);
+  const loadBetRooms = useCallback(async () => {
+    try {
+      const raw = await readContractSafe<[bigint[], `0x${string}`[], `0x${string}`[], number[], number[], `0x${string}`[], number[], number[], bigint[]]>({
+        address: BET_CONTRACT_ADDRESS,
+        abi: BET_ABI,
+        functionName: "getRecentRooms",
+        args: [BigInt(50)],
+      });
+
+      const [ids, creators, challengers, nftCounts, statuses, winners, coinResults, creatorChoices, createdAts] = raw;
+
+      const rooms: BetRoom[] = await Promise.all(
+        ids.map(async (id, i) => {
+          const status = STATUS_MAP[statuses[i]] ?? "cancelled";
+          let creatorTokenIds: string[] = [];
+          let challengerTokenIds: string[] = [];
+
+          if (status === "waiting" || status === "active") {
+            try {
+              const tokenData = await readContractSafe<[bigint[], bigint[]]>({
+                address: BET_CONTRACT_ADDRESS,
+                abi: BET_ABI,
+                functionName: "getRoomTokenIds",
+                args: [id],
+              });
+              creatorTokenIds = tokenData[0].map(String);
+              challengerTokenIds = tokenData[1].map(String);
+            } catch {}
+          }
+
+          const winner = winners[i].toLowerCase();
+          return {
+            id,
+            creator_wallet: creators[i].toLowerCase(),
+            challenger_wallet: challengers[i] !== ZERO_ADDRESS ? challengers[i].toLowerCase() : null,
+            nft_count: nftCounts[i],
+            status,
+            creator_choice: choiceToSide(creatorChoices[i]),
+            creator_nft_ids: creatorTokenIds,
+            challenger_nft_ids: challengerTokenIds,
+            coin_result: status === "complete" ? choiceToSide(coinResults[i]) : null,
+            winner_wallet: winner !== ZERO_ADDRESS ? winner : null,
+            created_at: new Date(Number(createdAts[i]) * 1000).toISOString(),
+          } as BetRoom;
+        })
+      );
+
+      const addrLower = address?.toLowerCase();
+      setBetRooms(rooms.filter(r => r.status === "waiting" || r.status === "active" || r.status === "flipping"));
+      setMyCompletedBets(
+        addrLower
+          ? rooms.filter(r => r.status === "complete" && (r.creator_wallet === addrLower || r.challenger_wallet === addrLower)).slice(-5).reverse()
+          : []
+      );
+    } catch (e) { console.error("loadBetRooms", e); }
+  }, [address]);
 
   useEffect(() => { loadLeaderboard(); loadStore(); loadBurnData(); fetch("/api/verify", { method: "POST" }).catch(() => {}); supabase.from("settings").select("value").eq("key", "stake_enabled").single().then(({ data }) => setStakeEnabled(data?.value === "true")); supabase.from("settings").select("value").eq("key", "transfer_enabled").single().then(({ data }) => setTransferEnabled(data?.value !== "false")); }, []);
   useEffect(() => { if (isConnected && address) { loadUserData(); loadBurnData(); loadLeaderboard(); } }, [isConnected, address, loadUserData, loadBurnData, loadLeaderboard]);
   useEffect(() => { if (isAdmin && tab === "admin") loadAdminData(); }, [isAdmin, tab, loadAdminData]);
   useEffect(() => { if (tab === "dashboard") loadLeaderboard(); }, [tab, loadLeaderboard]);
+  useEffect(() => {
+    if (tab === "bet") {
+      loadBetRooms();
+      if (address) {
+        readContractSafe<boolean>({
+          address: NFT_CONTRACT_ADDRESS,
+          abi: ERC721_ABI,
+          functionName: "isApprovedForAll",
+          args: [address as `0x${string}`, BET_CONTRACT_ADDRESS],
+        }).then(approved => setBetApproved(!!approved)).catch(() => {});
+      }
+    }
+  }, [tab, loadBetRooms, address]);
 
   // ═══ STAKE HANDLERS ═══
   const handleStake = async () => {
@@ -444,6 +555,154 @@ export default function StakePage() {
   const addTxField = (rid: number) => setBurnTxInputs(prev => { const a = [...(prev[rid] || [""]), ""]; return { ...prev, [rid]: a }; });
   const removeTxField = (rid: number, idx: number) => setBurnTxInputs(prev => { const a = [...(prev[rid] || [])]; a.splice(idx, 1); if (a.length === 0) a.push(""); return { ...prev, [rid]: a }; });
 
+  // ═══ BET HANDLERS (on-chain) ═══
+  const resolvedBetCount = betNftCount === "custom" ? parseInt(betCustomCount || "0") : betNftCount;
+
+  const ensureBetApproval = async (): Promise<boolean> => {
+    if (!address) return false;
+    try {
+      const approved = await readContractSafe<boolean>({
+        address: NFT_CONTRACT_ADDRESS,
+        abi: ERC721_ABI,
+        functionName: "isApprovedForAll",
+        args: [address as `0x${string}`, BET_CONTRACT_ADDRESS],
+      });
+      if (approved) { setBetApproved(true); return true; }
+      showMsg("Approve NFT contract first — confirm in wallet", "ok");
+      const txHash = await writeContractAsync({
+        address: NFT_CONTRACT_ADDRESS,
+        abi: ERC721_ABI,
+        functionName: "setApprovalForAll",
+        args: [BET_CONTRACT_ADDRESS, true],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      setBetApproved(true);
+      return true;
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); return false; }
+  };
+
+  const handleCreateBet = async () => {
+    if (!address || betSelectedIds.size === 0) return;
+    const ids = Array.from(betSelectedIds);
+    if (ids.length !== resolvedBetCount) { showMsg(`Select exactly ${resolvedBetCount} NFT(s) to wager`, "err"); return; }
+    setCreatingBet(true);
+    try {
+      if (!(await ensureBetApproval())) return;
+      const txHash = await writeContractAsync({
+        address: BET_CONTRACT_ADDRESS,
+        abi: BET_ABI,
+        functionName: "createRoom",
+        args: [ids.map(BigInt), sideToChoice(betChoice)],
+      });
+      showMsg("Tx submitted — waiting for confirmation...");
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Bet room created! Waiting for a challenger...");
+      setBetSelectedIds(new Set());
+      await loadBetRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+    finally { setCreatingBet(false); }
+  };
+
+  const handleJoinBet = async (roomId: bigint) => {
+    if (!address || betJoinSelectedIds.size === 0) return;
+    setJoiningBet(true);
+    try {
+      if (!(await ensureBetApproval())) return;
+      const txHash = await writeContractAsync({
+        address: BET_CONTRACT_ADDRESS,
+        abi: BET_ABI,
+        functionName: "joinRoom",
+        args: [roomId, Array.from(betJoinSelectedIds).map(BigInt)],
+      });
+      showMsg("Tx submitted — waiting for confirmation...");
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Joined! Both players are ready — flip the coin!");
+      setBetJoinRoomId(null);
+      setBetJoinSelectedIds(new Set());
+      await loadBetRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+    finally { setJoiningBet(false); }
+  };
+
+  const handleFlip = async (roomId: bigint) => {
+    if (!address) return;
+    setFlippingBet(true);
+    setCoinAnimating(true);
+    try {
+      // Submit flip() tx — this only requests VRF randomness
+      const txHash = await writeContractAsync({
+        address: BET_CONTRACT_ADDRESS,
+        abi: BET_ABI,
+        functionName: "flip",
+        args: [roomId],
+      });
+      showMsg("Flip requested — waiting for Chainlink VRF...");
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      await loadBetRooms();
+
+      // Poll getRoom() until Chainlink fulfills (status goes from Flipping → Complete)
+      // Chainlink VRF on Base typically responds in 1-3 blocks (~2-6 seconds)
+      let attempts = 0;
+      const poll = async (): Promise<void> => {
+        if (attempts++ > 40) { // max ~80s
+          showMsg("VRF taking longer than expected — result will appear when confirmed", "ok");
+          return;
+        }
+        await new Promise(r => setTimeout(r, 2000));
+        const roomData = await readContractSafe<[string, string, number, number, string, number, number, bigint, bigint]>({
+          address: BET_CONTRACT_ADDRESS,
+          abi: BET_ABI,
+          functionName: "getRoom",
+          args: [roomId],
+        });
+        const [,,,status, winner, coinResult, creatorChoice] = roomData;
+        if (status === 3) { // Complete
+          setFlipResult({
+            roomId,
+            result: choiceToSide(coinResult),
+            winner: (winner as string).toLowerCase(),
+            creatorChoice: choiceToSide(creatorChoice),
+          });
+          await loadBetRooms();
+        } else {
+          return poll(); // keep polling
+        }
+      };
+      await poll();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+    finally { setFlippingBet(false); setCoinAnimating(false); }
+  };
+
+  const handleRefundExpired = async (roomId: bigint) => {
+    if (!address) return;
+    try {
+      const txHash = await writeContractAsync({
+        address: BET_CONTRACT_ADDRESS,
+        abi: BET_ABI,
+        functionName: "refundExpired",
+        args: [roomId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Room expired — NFTs returned to both players.");
+      await loadBetRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+  };
+
+  const handleCancelBet = async (roomId: bigint) => {
+    if (!address) return;
+    try {
+      const txHash = await writeContractAsync({
+        address: BET_CONTRACT_ADDRESS,
+        abi: BET_ABI,
+        functionName: "cancelRoom",
+        args: [roomId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Bet room cancelled. NFTs returned to your wallet.");
+      await loadBetRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+  };
+
   const toggleSelect = (id: string) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const selectAll = () => setSelectedIds(new Set(ownedNfts.filter(n => !stakedIds.has(n.tokenId) && !listedIds.has(n.tokenId)).map(n => n.tokenId)));
   const stakeableNfts = ownedNfts.filter(n => !stakedIds.has(n.tokenId) && !listedIds.has(n.tokenId));
@@ -493,7 +752,7 @@ export default function StakePage() {
           </div>
           {/* Desktop tabs */}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 1 }}>
-            {(["stake", "store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
+            {(["stake", "store", "burn", "bet", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
               <button key={t} onClick={() => { setTab(t as any); setMobileMenu(false); }} className="nav-tab-desktop" style={{ background: "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 10, fontWeight: 800, fontFamily: "monospace", letterSpacing: 1.5, borderBottom: tab === t ? `2px solid ${T.accent}` : "2px solid transparent", padding: "6px 2px", whiteSpace: "nowrap", flexShrink: 0 }}>▸{t.toUpperCase()}</button>
             ))}
           </div>
@@ -507,7 +766,7 @@ export default function StakePage() {
         {/* Mobile dropdown */}
         {mobileMenu && (
           <div className="nav-mobile-menu" style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 0 12px", borderTop: `1px solid ${T.border}` }}>
-            {(["stake", "store", "burn", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
+            {(["stake", "store", "burn", "bet", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
               <button key={t} onClick={() => { setTab(t as any); setMobileMenu(false); }} style={{ background: tab === t ? `${T.accent}10` : "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 12, fontWeight: 800, fontFamily: "monospace", letterSpacing: 2, padding: "10px 16px", textAlign: "left", borderRadius: 6, borderLeft: tab === t ? `3px solid ${T.accent}` : "3px solid transparent" }}>▸ {t.toUpperCase()}</button>
             ))}
           </div>
@@ -542,6 +801,19 @@ export default function StakePage() {
           .nav-hamburger { display: none !important; }
           .nav-mobile-menu { display: none !important; }
         }
+        @keyframes coinSpin {
+          0%   { transform: rotateY(0deg) scale(1); }
+          40%  { transform: rotateY(720deg) scale(1.15); }
+          70%  { transform: rotateY(1260deg) scale(1.08); }
+          100% { transform: rotateY(1440deg) scale(1); }
+        }
+        .coin-spin { animation: coinSpin 1.8s cubic-bezier(.4,0,.2,1) forwards; }
+        @keyframes resultPop {
+          0%   { transform: scale(0.6); opacity: 0; }
+          60%  { transform: scale(1.1); opacity: 1; }
+          100% { transform: scale(1); }
+        }
+        .result-pop { animation: resultPop 0.4s ease forwards; }
       `}</style>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 16px 60px" }}>
@@ -1028,6 +1300,304 @@ export default function StakePage() {
                 </div>
                 <button onClick={() => { const csv = "Listing,Buyer,WL Wallet,$CUM,Date\n" + adminData.purchases.map((p: any) => `"${p.store_listings?.title || p.listing_id}","${p.buyer_wallet}","${p.wl_wallet}",${p.cum_spent},"${new Date(p.purchased_at).toISOString()}"`).join("\n"); const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "cambrilio-wl-export.csv"; a.click(); }} style={{ marginTop: 10, background: `${T.accent}15`, border: `1px solid ${T.accent}40`, borderRadius: 6, padding: "6px 14px", color: T.accent, fontSize: 9, fontFamily: "monospace", fontWeight: 700, cursor: "pointer" }}>📥 EXPORT CSV</button>
               </div>
+            )}
+          </>
+        )}
+
+        {/* ═══════════════ BET TAB ═══════════════ */}
+        {tab === "bet" && (
+          <>
+            <h2 style={{ fontSize: 20, fontWeight: 900, fontFamily: "monospace", letterSpacing: 2, color: T.white, marginBottom: 4 }}>CAMBRILIO BET</h2>
+            <p style={{ fontSize: 11, fontFamily: "monospace", color: T.grayD, marginBottom: 20 }}>Wager your NFTs in a peer-to-peer coin flip. Winner takes all.</p>
+
+            {!isConnected ? (
+              <div style={{ textAlign: "center", padding: 60 }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>🎰</div>
+                <div style={{ fontSize: 13, fontWeight: 900, fontFamily: "monospace", color: T.grayD, letterSpacing: 2 }}>CONNECT YOUR WALLET TO PLAY</div>
+              </div>
+            ) : (
+              <>
+                {/* ── FLIP RESULT OVERLAY ── */}
+                {flipResult && (
+                  <div style={{ marginBottom: 20, padding: 24, background: flipResult.winner.toLowerCase() === address?.toLowerCase() ? `${T.success}12` : `${T.burn}12`, border: `2px solid ${flipResult.winner.toLowerCase() === address?.toLowerCase() ? T.success : T.burn}`, borderRadius: 16, textAlign: "center" }} className="result-pop">
+                    <div style={{ fontSize: 48, marginBottom: 8 }}>{flipResult.winner.toLowerCase() === address?.toLowerCase() ? "🏆" : "💀"}</div>
+                    <div style={{ fontSize: 22, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: flipResult.winner.toLowerCase() === address?.toLowerCase() ? T.success : T.burn, marginBottom: 6 }}>
+                      {flipResult.winner.toLowerCase() === address?.toLowerCase() ? "YOU WIN!" : "YOU LOSE"}
+                    </div>
+                    <div style={{ fontSize: 13, fontFamily: "monospace", color: T.white, marginBottom: 4 }}>
+                      Result: <span style={{ fontWeight: 900, color: T.accent }}>{flipResult.result.toUpperCase()}</span>
+                    </div>
+                    <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD }}>
+                      Winner: <span style={{ color: T.accent }}>{shortAddr(flipResult.winner)}</span>
+                    </div>
+                    <button onClick={() => setFlipResult(null)} style={{ marginTop: 14, background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 18px", color: T.grayD, fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>DISMISS</button>
+                  </div>
+                )}
+
+                {/* ── MY ACTIVE ROOM (creator view) ── */}
+                {(() => {
+                  const myRoom = betRooms.find(r => r.creator_wallet === address?.toLowerCase() || r.challenger_wallet === address?.toLowerCase());
+                  if (!myRoom) return null;
+                  const isCreator = myRoom.creator_wallet === address?.toLowerCase();
+                  return (
+                    <div style={{ ...PS, border: `1px solid ${myRoom.status === "active" ? T.accent : T.border}40` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.accent, letterSpacing: 1 }}>YOUR ROOM</div>
+                          <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 2 }}>ROOM #{String(myRoom.id)}</div>
+                        </div>
+                        <span style={{ padding: "3px 10px", borderRadius: 6, fontSize: 9, fontWeight: 800, fontFamily: "monospace", background: myRoom.status === "active" ? `${T.success}20` : myRoom.status === "flipping" ? `${T.sweep}20` : `${T.gold}20`, color: myRoom.status === "active" ? T.success : myRoom.status === "flipping" ? T.sweep : T.gold }}>{myRoom.status === "active" ? "⚡ READY TO FLIP" : myRoom.status === "flipping" ? "🔗 WAITING FOR VRF..." : "⏳ WAITING FOR CHALLENGER"}</span>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 10, alignItems: "center", marginBottom: 14 }}>
+                        {/* Creator side */}
+                        <div style={{ background: T.card, borderRadius: 10, padding: 12, border: isCreator ? `1px solid ${T.accent}40` : `1px solid ${T.border}` }}>
+                          <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginBottom: 4 }}>CREATOR {isCreator && <span style={{ color: T.accent }}>· YOU</span>}</div>
+                          <div style={{ fontSize: 10, fontFamily: "monospace", color: T.white, wordBreak: "break-all" }}>{shortAddr(myRoom.creator_wallet)}</div>
+                          <div style={{ fontSize: 9, color: T.accent, fontFamily: "monospace", marginTop: 4 }}>
+                            {myRoom.nft_count} NFT{myRoom.nft_count > 1 ? "s" : ""} · <span style={{ color: myRoom.creator_choice === "heads" ? T.gold : T.sweep }}>{myRoom.creator_choice.toUpperCase()}</span>
+                          </div>
+                          <div style={{ fontSize: 8, color: T.grayD, fontFamily: "monospace", marginTop: 2 }}>#{myRoom.creator_nft_ids.join(", #")}</div>
+                        </div>
+
+                        <div style={{ fontSize: 18, color: T.burn, fontWeight: 900, textAlign: "center" }}>VS</div>
+
+                        {/* Challenger side */}
+                        <div style={{ background: T.card, borderRadius: 10, padding: 12, border: !isCreator ? `1px solid ${T.accent}40` : `1px solid ${T.border}` }}>
+                          {myRoom.challenger_wallet ? (
+                            <>
+                              <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginBottom: 4 }}>CHALLENGER {!isCreator && <span style={{ color: T.accent }}>· YOU</span>}</div>
+                              <div style={{ fontSize: 10, fontFamily: "monospace", color: T.white, wordBreak: "break-all" }}>{shortAddr(myRoom.challenger_wallet)}</div>
+                              <div style={{ fontSize: 9, color: T.accent, fontFamily: "monospace", marginTop: 4 }}>{myRoom.nft_count} NFT{myRoom.nft_count > 1 ? "s" : ""}</div>
+                              <div style={{ fontSize: 8, color: T.grayD, fontFamily: "monospace", marginTop: 2 }}>#{myRoom.challenger_nft_ids.join(", #")}</div>
+                            </>
+                          ) : (
+                            <div style={{ textAlign: "center", padding: "8px 0" }}>
+                              <div style={{ fontSize: 16 }}>⌛</div>
+                              <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 4 }}>WAITING FOR<br />CHALLENGER</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {myRoom.status === "active" && (
+                          <button
+                            onClick={() => handleFlip(myRoom.id)}
+                            disabled={flippingBet}
+                            className={coinAnimating ? "coin-spin" : ""}
+                            style={{ flex: 1, padding: "12px 0", background: flippingBet ? T.grayK : T.accent, border: "none", borderRadius: 10, color: T.bg, fontSize: 13, fontWeight: 900, fontFamily: "monospace", letterSpacing: 2, cursor: flippingBet ? "not-allowed" : "pointer", transition: "background 0.2s" }}
+                          >
+                            {flippingBet ? "🔗 WAITING FOR VRF..." : "🪙 FLIP COIN"}
+                          </button>
+                        )}
+                        {myRoom.status === "flipping" && (
+                          <div style={{ flex: 1, padding: "12px 0", background: `${T.sweep}10`, border: `1px solid ${T.sweep}30`, borderRadius: 10, color: T.sweep, fontSize: 11, fontWeight: 800, fontFamily: "monospace", letterSpacing: 1, textAlign: "center" }}>
+                            🔗 CHAINLINK VRF RESOLVING...
+                          </div>
+                        )}
+                        {myRoom.status === "waiting" && isCreator && (
+                          <button onClick={() => handleCancelBet(myRoom.id)} style={{ padding: "10px 16px", background: `${T.burn}15`, border: `1px solid ${T.burn}40`, borderRadius: 10, color: T.burn, fontSize: 10, fontWeight: 800, fontFamily: "monospace", cursor: "pointer" }}>CANCEL</button>
+                        )}
+                        {(myRoom.status === "active" || myRoom.status === "flipping") &&
+                          Number(myRoom.created_at) > 0 &&
+                          Date.now() > new Date(myRoom.created_at).getTime() + 24 * 3600 * 1000 && (
+                          <button onClick={() => handleRefundExpired(myRoom.id)} style={{ padding: "10px 14px", background: `${T.gold}15`, border: `1px solid ${T.gold}40`, borderRadius: 10, color: T.gold, fontSize: 10, fontWeight: 800, fontFamily: "monospace", cursor: "pointer" }}>⏰ REFUND EXPIRED</button>
+                        )}
+                        <button onClick={loadBetRooms} style={{ padding: "10px 14px", background: `${T.accent}10`, border: `1px solid ${T.accent}20`, borderRadius: 10, color: T.accent, fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>↻</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* ── CREATE BET (only if not already in a room) ── */}
+                {!betRooms.find(r => r.creator_wallet === address?.toLowerCase() || r.challenger_wallet === address?.toLowerCase()) && (
+                  <div style={PS}>
+                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.accent, letterSpacing: 2, marginBottom: 14 }}>CREATE BET ROOM</h3>
+
+                    {/* Step 1: choose NFT count */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>HOW MANY NFTs TO WAGER?</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {([1, 2, 3, "custom"] as const).map(v => (
+                          <button key={v} onClick={() => { setBetNftCount(v); setBetSelectedIds(new Set()); }} style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${betNftCount === v ? T.accent : T.border}`, background: betNftCount === v ? `${T.accent}15` : T.card, color: betNftCount === v ? T.accent : T.grayD, fontSize: 11, fontWeight: 800, fontFamily: "monospace", cursor: "pointer" }}>
+                            {v === "custom" ? "CUSTOM" : `${v} NFT`}
+                          </button>
+                        ))}
+                      </div>
+                      {betNftCount === "custom" && (
+                        <input type="number" min={1} max={20} value={betCustomCount} onChange={e => { setBetCustomCount(e.target.value); setBetSelectedIds(new Set()); }} placeholder="Enter amount..." style={{ ...inputStyle, marginTop: 8, width: 160 }} />
+                      )}
+                    </div>
+
+                    {/* Step 2: choose heads or tails */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>YOUR CALL</div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {(["heads", "tails"] as const).map(side => (
+                          <button key={side} onClick={() => setBetChoice(side)} style={{ padding: "10px 24px", borderRadius: 10, border: `1px solid ${betChoice === side ? T.gold : T.border}`, background: betChoice === side ? `${T.gold}15` : T.card, color: betChoice === side ? T.gold : T.grayD, fontSize: 13, fontWeight: 900, fontFamily: "monospace", letterSpacing: 1, cursor: "pointer" }}>
+                            {side === "heads" ? "👑 HEADS" : "🌀 TAILS"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Step 3: select NFTs */}
+                    {resolvedBetCount > 0 && (
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
+                          SELECT {resolvedBetCount} NFT{resolvedBetCount > 1 ? "s" : ""} TO WAGER
+                          <span style={{ marginLeft: 8, color: betSelectedIds.size === resolvedBetCount ? T.success : T.accent }}>{betSelectedIds.size}/{resolvedBetCount} selected</span>
+                        </div>
+                        {ownedNfts.length === 0 ? (
+                          <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD }}>No NFTs found in your wallet.</div>
+                        ) : (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                            {ownedNfts.map(nft => {
+                              const sel = betSelectedIds.has(nft.tokenId);
+                              const locked = betRooms.some(r => [...r.creator_nft_ids, ...r.challenger_nft_ids].includes(nft.tokenId));
+                              return (
+                                <div
+                                  key={nft.tokenId}
+                                  onClick={() => {
+                                    if (locked) return;
+                                    setBetSelectedIds(prev => {
+                                      const n = new Set(prev);
+                                      if (n.has(nft.tokenId)) { n.delete(nft.tokenId); return n; }
+                                      if (n.size >= resolvedBetCount) return prev;
+                                      n.add(nft.tokenId); return n;
+                                    });
+                                  }}
+                                  style={{ width: 72, borderRadius: 10, overflow: "hidden", border: `2px solid ${locked ? T.grayK : sel ? T.accent : T.border}`, cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.4 : 1, background: sel ? `${T.accent}10` : T.card, flexShrink: 0 }}
+                                >
+                                  {nft.image && <img src={nft.image} alt={`#${nft.tokenId}`} style={{ width: "100%", display: "block" }} />}
+                                  <div style={{ padding: "3px 4px", textAlign: "center", fontSize: 8, fontFamily: "monospace", color: sel ? T.accent : T.grayD, fontWeight: 700 }}>#{nft.tokenId}</div>
+                                  {locked && <div style={{ padding: "2px 4px", textAlign: "center", fontSize: 7, fontFamily: "monospace", color: T.burn }}>IN BET</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleCreateBet}
+                      disabled={creatingBet || betSelectedIds.size !== resolvedBetCount || resolvedBetCount === 0}
+                      style={{ width: "100%", padding: "12px 0", background: (creatingBet || betSelectedIds.size !== resolvedBetCount || resolvedBetCount === 0) ? T.grayK : T.accent, border: "none", borderRadius: 10, color: T.bg, fontSize: 12, fontWeight: 900, fontFamily: "monospace", letterSpacing: 2, cursor: (creatingBet || betSelectedIds.size !== resolvedBetCount || resolvedBetCount === 0) ? "not-allowed" : "pointer" }}
+                    >
+                      {creatingBet ? "CREATING..." : "🎰 CREATE BET ROOM"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── OPEN LOBBIES ── */}
+                <div style={PS}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.white, letterSpacing: 2 }}>OPEN LOBBIES</h3>
+                    <button onClick={loadBetRooms} style={{ background: `${T.accent}10`, border: `1px solid ${T.accent}20`, borderRadius: 6, padding: "4px 10px", color: T.accent, fontSize: 9, fontFamily: "monospace", cursor: "pointer" }}>↻ REFRESH</button>
+                  </div>
+
+                  {betRooms.filter(r => r.status === "waiting" && r.creator_wallet !== address?.toLowerCase()).length === 0 ? (
+                    <div style={{ textAlign: "center", padding: "30px 0", color: T.grayD, fontSize: 11, fontFamily: "monospace" }}>No open rooms right now. Create one above!</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {betRooms.filter(r => r.status === "waiting" && r.creator_wallet !== address?.toLowerCase()).map(room => (
+                        <div key={room.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 14 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 800, fontFamily: "monospace", color: T.white }}>{shortAddr(room.creator_wallet)}</div>
+                              <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 2 }}>wagering {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""} · #{room.creator_nft_ids.join(", #")}</div>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 10, fontWeight: 900, fontFamily: "monospace", color: room.creator_choice === "heads" ? T.gold : T.sweep }}>{room.creator_choice === "heads" ? "👑 HEADS" : "🌀 TAILS"}</div>
+                              <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD, marginTop: 2 }}>{new Date(room.created_at).toLocaleTimeString()}</div>
+                            </div>
+                          </div>
+
+                          {/* Join UI — inline NFT selector */}
+                          {betJoinRoomId === room.id ? (
+                            <div>
+                              <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginBottom: 8 }}>
+                                SELECT {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""} TO MATCH
+                                <span style={{ marginLeft: 8, color: betJoinSelectedIds.size === room.nft_count ? T.success : T.accent }}>{betJoinSelectedIds.size}/{room.nft_count}</span>
+                              </div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxHeight: 200, overflowY: "auto", marginBottom: 10 }}>
+                                {ownedNfts.map(nft => {
+                                  const sel = betJoinSelectedIds.has(nft.tokenId);
+                                  const locked = betRooms.some(r => [...r.creator_nft_ids, ...r.challenger_nft_ids].includes(nft.tokenId));
+                                  return (
+                                    <div
+                                      key={nft.tokenId}
+                                      onClick={() => {
+                                        if (locked) return;
+                                        setBetJoinSelectedIds(prev => {
+                                          const n = new Set(prev);
+                                          if (n.has(nft.tokenId)) { n.delete(nft.tokenId); return n; }
+                                          if (n.size >= room.nft_count) return prev;
+                                          n.add(nft.tokenId); return n;
+                                        });
+                                      }}
+                                      style={{ width: 64, borderRadius: 8, overflow: "hidden", border: `2px solid ${locked ? T.grayK : sel ? T.accent : T.border}`, cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.4 : 1, background: sel ? `${T.accent}10` : T.bgS, flexShrink: 0 }}
+                                    >
+                                      {nft.image && <img src={nft.image} alt={`#${nft.tokenId}`} style={{ width: "100%", display: "block" }} />}
+                                      <div style={{ padding: "2px 3px", textAlign: "center", fontSize: 7, fontFamily: "monospace", color: sel ? T.accent : T.grayD, fontWeight: 700 }}>#{nft.tokenId}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div style={{ display: "flex", gap: 8 }}>
+                                <button
+                                  onClick={() => handleJoinBet(room.id)}
+                                  disabled={joiningBet || betJoinSelectedIds.size !== room.nft_count}
+                                  style={{ flex: 1, padding: "10px 0", background: (joiningBet || betJoinSelectedIds.size !== room.nft_count) ? T.grayK : T.accent, border: "none", borderRadius: 8, color: T.bg, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: (joiningBet || betJoinSelectedIds.size !== room.nft_count) ? "not-allowed" : "pointer" }}
+                                >
+                                  {joiningBet ? "JOINING..." : "CONFIRM JOIN"}
+                                </button>
+                                <button onClick={() => { setBetJoinRoomId(null); setBetJoinSelectedIds(new Set()); }} style={{ padding: "10px 14px", background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, color: T.grayD, fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>CANCEL</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => { setBetJoinRoomId(room.id); setBetJoinSelectedIds(new Set()); }}
+                              disabled={!!betRooms.find(r => r.creator_wallet === address?.toLowerCase() || r.challenger_wallet === address?.toLowerCase())}
+                              style={{ width: "100%", padding: "9px 0", background: betRooms.find(r => r.creator_wallet === address?.toLowerCase() || r.challenger_wallet === address?.toLowerCase()) ? T.grayK : `${T.sweep}15`, border: `1px solid ${T.sweep}30`, borderRadius: 8, color: T.sweep, fontSize: 11, fontWeight: 800, fontFamily: "monospace", cursor: betRooms.find(r => r.creator_wallet === address?.toLowerCase() || r.challenger_wallet === address?.toLowerCase()) ? "not-allowed" : "pointer" }}
+                            >
+                              ⚡ JOIN & MATCH {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── MY RECENT COMPLETED BETS ── */}
+                {myCompletedBets.length > 0 && (
+                  <div style={PS}>
+                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.white, letterSpacing: 2, marginBottom: 12 }}>RECENT RESULTS</h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {myCompletedBets.map(bet => {
+                        const iWon = bet.winner_wallet?.toLowerCase() === address?.toLowerCase();
+                        return (
+                          <div key={bet.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: iWon ? `${T.success}08` : `${T.burn}08`, border: `1px solid ${iWon ? T.success : T.burn}30`, borderRadius: 10, flexWrap: "wrap", gap: 6 }}>
+                            <div>
+                              <span style={{ fontSize: 11, fontWeight: 900, fontFamily: "monospace", color: iWon ? T.success : T.burn }}>{iWon ? "🏆 WIN" : "💀 LOSS"}</span>
+                              <span style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginLeft: 8 }}>vs {shortAddr(iWon ? (bet.challenger_wallet && bet.creator_wallet === bet.winner_wallet ? bet.challenger_wallet : bet.creator_wallet) || "" : (bet.winner_wallet || ""))}</span>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 10, fontFamily: "monospace", color: T.accent }}>
+                                {bet.coin_result?.toUpperCase()} · {bet.nft_count * 2} NFTs {iWon ? "won" : "lost"}
+                              </div>
+                              <div style={{ fontSize: 8, fontFamily: "monospace", color: T.grayD }}>{new Date(bet.created_at).toLocaleString()}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
