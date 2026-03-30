@@ -233,7 +233,7 @@ export default function StakePage() {
   const [joiningBet, setJoiningBet] = useState(false);
   const [flippingBet, setFlippingBet] = useState(false);
   const [flipResult, setFlipResult] = useState<{ roomId: bigint; result: "heads" | "tails"; winner: string; creatorChoice: "heads" | "tails" } | null>(null);
-  const [coinAnimating, setCoinAnimating] = useState(false);
+  const [coinPhase, setCoinPhase] = useState<"idle" | "spinning" | "landed">("idle");
   const [betApproved, setBetApproved] = useState(false);
 
   // Mobile menu
@@ -647,7 +647,7 @@ export default function StakePage() {
   const handleFlip = async (roomId: bigint) => {
     if (!address) return;
     setFlippingBet(true);
-    setCoinAnimating(true);
+    setCoinPhase("spinning");
     try {
       // Submit flip() tx — this only requests VRF randomness
       const txHash = await writeContractAsync({
@@ -656,16 +656,15 @@ export default function StakePage() {
         functionName: "flip",
         args: [roomId],
       });
-      showMsg("Flip requested — waiting for Chainlink VRF...");
       await publicClient.waitForTransactionReceipt({ hash: txHash });
       await loadBetRooms();
 
       // Poll getRoom() until Chainlink fulfills (status goes from Flipping → Complete)
-      // Chainlink VRF on Base typically responds in 1-3 blocks (~2-6 seconds)
       let attempts = 0;
       const poll = async (): Promise<void> => {
-        if (attempts++ > 40) { // max ~80s
+        if (attempts++ > 40) {
           showMsg("VRF taking longer than expected — result will appear when confirmed", "ok");
+          setCoinPhase("idle");
           return;
         }
         await new Promise(r => setTimeout(r, 2000));
@@ -677,6 +676,7 @@ export default function StakePage() {
         });
         const [,,,status, winner, coinResult, creatorChoice] = roomData;
         if (status === 3) { // Complete
+          setCoinPhase("landed");
           setFlipResult({
             roomId,
             result: choiceToSide(coinResult),
@@ -685,12 +685,15 @@ export default function StakePage() {
           });
           await loadBetRooms();
         } else {
-          return poll(); // keep polling
+          return poll();
         }
       };
       await poll();
-    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
-    finally { setFlippingBet(false); setCoinAnimating(false); }
+    } catch (err: any) {
+      showMsg(err.shortMessage || err.message, "err");
+      setCoinPhase("idle");
+    }
+    finally { setFlippingBet(false); }
   };
 
   const handleRefundExpired = async (roomId: bigint) => {
@@ -821,19 +824,36 @@ export default function StakePage() {
           .nav-hamburger { display: none !important; }
           .nav-mobile-menu { display: none !important; }
         }
-        @keyframes coinSpin {
-          0%   { transform: rotateY(0deg) scale(1); }
-          40%  { transform: rotateY(720deg) scale(1.15); }
-          70%  { transform: rotateY(1260deg) scale(1.08); }
-          100% { transform: rotateY(1440deg) scale(1); }
+        @keyframes coinSpinLoop {
+          from { transform: rotateY(0deg); }
+          to   { transform: rotateY(360deg); }
         }
-        .coin-spin { animation: coinSpin 1.8s cubic-bezier(.4,0,.2,1) forwards; }
+        .coin-spin-loop { animation: coinSpinLoop 0.55s linear infinite; }
+
+        @keyframes coinLandHeads {
+          0%   { transform: rotateY(0deg); }
+          100% { transform: rotateY(1440deg); }
+        }
+        .coin-land-heads { animation: coinLandHeads 1.4s cubic-bezier(0.25,0.46,0.45,0.94) forwards; }
+
+        @keyframes coinLandTails {
+          0%   { transform: rotateY(0deg); }
+          100% { transform: rotateY(1260deg); }
+        }
+        .coin-land-tails { animation: coinLandTails 1.4s cubic-bezier(0.25,0.46,0.45,0.94) forwards; }
+
         @keyframes resultPop {
           0%   { transform: scale(0.6); opacity: 0; }
           60%  { transform: scale(1.1); opacity: 1; }
           100% { transform: scale(1); }
         }
         .result-pop { animation: resultPop 0.4s ease forwards; }
+
+        @keyframes overlayFadeIn {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+        .overlay-fade { animation: overlayFadeIn 0.25s ease forwards; }
       `}</style>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 16px 60px" }}>
@@ -1337,20 +1357,56 @@ export default function StakePage() {
               </div>
             ) : (
               <>
-                {/* ── FLIP RESULT OVERLAY ── */}
-                {flipResult && (
-                  <div style={{ marginBottom: 20, padding: 24, background: flipResult.winner.toLowerCase() === address?.toLowerCase() ? `${T.success}12` : `${T.burn}12`, border: `2px solid ${flipResult.winner.toLowerCase() === address?.toLowerCase() ? T.success : T.burn}`, borderRadius: 16, textAlign: "center" }} className="result-pop">
-                    <div style={{ fontSize: 48, marginBottom: 8 }}>{flipResult.winner.toLowerCase() === address?.toLowerCase() ? "🏆" : "💀"}</div>
-                    <div style={{ fontSize: 22, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: flipResult.winner.toLowerCase() === address?.toLowerCase() ? T.success : T.burn, marginBottom: 6 }}>
-                      {flipResult.winner.toLowerCase() === address?.toLowerCase() ? "YOU WIN!" : "YOU LOSE"}
+                {/* ── COIN FLIP OVERLAY ── */}
+                {coinPhase !== "idle" && (
+                  <div className="overlay-fade" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backdropFilter: "blur(6px)" }}>
+
+                    {/* Coin 3D */}
+                    <div style={{ perspective: "700px", marginBottom: 36 }}>
+                      <div
+                        className={
+                          coinPhase === "spinning" ? "coin-spin-loop" :
+                          flipResult?.result === "heads" ? "coin-land-heads" : "coin-land-tails"
+                        }
+                        style={{ width: 140, height: 140, position: "relative", transformStyle: "preserve-3d" }}
+                      >
+                        {/* HEADS face */}
+                        <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "linear-gradient(135deg, #FFD700, #FFA500)", backfaceVisibility: "hidden", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 64, boxShadow: "0 0 32px rgba(255,215,0,0.5)" }}>
+                          👑
+                        </div>
+                        {/* TAILS face */}
+                        <div style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "linear-gradient(135deg, #7B6CD8, #3d2fa0)", backfaceVisibility: "hidden", transform: "rotateY(180deg)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 64, boxShadow: "0 0 32px rgba(123,108,216,0.5)" }}>
+                          🌀
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: 13, fontFamily: "monospace", color: T.white, marginBottom: 4 }}>
-                      Result: <span style={{ fontWeight: 900, color: T.accent }}>{flipResult.result.toUpperCase()}</span>
-                    </div>
-                    <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD }}>
-                      Winner: <span style={{ color: T.accent }}>{shortAddr(flipResult.winner)}</span>
-                    </div>
-                    <button onClick={() => setFlipResult(null)} style={{ marginTop: 14, background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 18px", color: T.grayD, fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>DISMISS</button>
+
+                    {coinPhase === "spinning" && (
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 900, fontFamily: "monospace", color: T.white, letterSpacing: 2, marginBottom: 8 }}>FLIPPING...</div>
+                        <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD }}>Verifying on Chainlink VRF</div>
+                      </div>
+                    )}
+
+                    {coinPhase === "landed" && flipResult && (
+                      <div className="result-pop" style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 52, marginBottom: 10 }}>
+                          {flipResult.result === "heads" ? "👑" : "🌀"}
+                        </div>
+                        <div style={{ fontSize: 11, fontFamily: "monospace", color: T.grayD, letterSpacing: 2, marginBottom: 8 }}>
+                          {flipResult.result.toUpperCase()}
+                        </div>
+                        <div style={{ fontSize: 28, fontWeight: 900, fontFamily: "monospace", letterSpacing: 3, color: flipResult.winner.toLowerCase() === address?.toLowerCase() ? T.success : T.burn, marginBottom: 8 }}>
+                          {flipResult.winner.toLowerCase() === address?.toLowerCase() ? "YOU WIN!" : "YOU LOSE"}
+                        </div>
+                        <div style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD, marginBottom: 20 }}>
+                          Winner: <span style={{ color: T.accent }}>{shortAddr(flipResult.winner)}</span>
+                        </div>
+                        <button onClick={() => { setCoinPhase("idle"); setFlipResult(null); }} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 24px", color: T.white, fontSize: 11, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>
+                          DISMISS
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1405,10 +1461,9 @@ export default function StakePage() {
                           <button
                             onClick={() => handleFlip(myRoom.id)}
                             disabled={flippingBet}
-                            className={coinAnimating ? "coin-spin" : ""}
                             style={{ flex: 1, padding: "12px 0", background: flippingBet ? T.grayK : T.accent, border: "none", borderRadius: 10, color: T.bg, fontSize: 13, fontWeight: 900, fontFamily: "monospace", letterSpacing: 2, cursor: flippingBet ? "not-allowed" : "pointer", transition: "background 0.2s" }}
                           >
-                            {flippingBet ? "🔗 WAITING FOR VRF..." : "🪙 FLIP COIN"}
+                            🪙 FLIP COIN
                           </button>
                         )}
                         {myRoom.status === "flipping" && (
