@@ -243,6 +243,148 @@ export default function StakePage() {
   // ═══ SHOW MESSAGE ═══
   const showMsg = (text: string, type: "ok" | "err" = "ok") => { setMsg(text); setMsgType(type); setTimeout(() => setMsg(""), 6000); };
 
+  // ═══ SHARE BET PNL CARD ═══
+  const sharePNLCard = () => {
+    if (!address || myCompletedBets.length === 0) return;
+    const addrLower = address.toLowerCase();
+
+    // Compute stats from completed bets
+    const wins = myCompletedBets.filter(b => b.winner_wallet === addrLower);
+    const losses = myCompletedBets.filter(b => b.winner_wallet !== addrLower);
+    const totalBets = myCompletedBets.length;
+    const winRate = totalBets > 0 ? Math.round((wins.length / totalBets) * 100) : 0;
+    const nftsWon = wins.reduce((acc, b) => acc + b.nft_count, 0);
+    const nftsLost = losses.reduce((acc, b) => acc + b.nft_count, 0);
+    const netNfts = nftsWon - nftsLost;
+
+    // ETH PNL (convert from wei bigint to ETH string)
+    const ethWon = wins.reduce((acc, b) => acc + b.eth_amount, BigInt(0));
+    const ethLost = losses.reduce((acc, b) => acc + b.eth_amount, BigInt(0));
+    const netEthWei = ethWon - ethLost;
+    const netEth = Number(netEthWei) / 1e18;
+    const hasEth = ethWon > BigInt(0) || ethLost > BigInt(0);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 800;
+    canvas.height = 440;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Background
+    ctx.fillStyle = "#06060b";
+    ctx.fillRect(0, 0, 800, 440);
+
+    // Border
+    ctx.strokeStyle = "#1a1a2c";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, 799, 439);
+
+    // Top accent bar gradient
+    const grad = ctx.createLinearGradient(0, 0, 800, 0);
+    grad.addColorStop(0, netNfts >= 0 ? "#00ff88" : "#ff4444");
+    grad.addColorStop(0.5, netNfts >= 0 ? "#c8ff00" : "#ff6b6b");
+    grad.addColorStop(1, netNfts >= 0 ? "#00ff88" : "#ff4444");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 800, 4);
+
+    // Logo + title
+    ctx.font = "900 15px monospace";
+    ctx.fillStyle = "#c8ff00";
+    ctx.letterSpacing = "4px";
+    ctx.fillText("CAMBRILIO", 40, 50);
+    ctx.font = "700 10px monospace";
+    ctx.fillStyle = "#55556a";
+    ctx.letterSpacing = "2px";
+    ctx.fillText("COINFLIP  •  PNL CARD", 40, 70);
+
+    // Divider
+    ctx.strokeStyle = "#1a1a2c";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(40, 88);
+    ctx.lineTo(760, 88);
+    ctx.stroke();
+
+    // Wallet
+    const shortWallet = `${address.slice(0, 8)}...${address.slice(-6)}`;
+    ctx.font = "700 10px monospace";
+    ctx.fillStyle = "#8888a0";
+    ctx.letterSpacing = "1px";
+    ctx.fillText("WALLET", 40, 113);
+    ctx.font = "700 13px monospace";
+    ctx.fillStyle = "#f0f0f5";
+    ctx.fillText(shortWallet, 40, 131);
+
+    // Net NFT PNL — big number
+    const pnlLabel = netNfts >= 0 ? `+${netNfts} NFTs` : `${netNfts} NFTs`;
+    ctx.font = "700 11px monospace";
+    ctx.fillStyle = "#8888a0";
+    ctx.letterSpacing = "1px";
+    ctx.fillText("NET PNL", 40, 182);
+    ctx.font = `900 56px monospace`;
+    ctx.fillStyle = netNfts >= 0 ? "#00ff88" : "#ff4444";
+    ctx.letterSpacing = "-1px";
+    ctx.fillText(pnlLabel, 40, 248);
+
+    // ETH PNL line
+    if (hasEth) {
+      const ethLabel = netEth >= 0 ? `+${netEth.toFixed(4)} ETH` : `${netEth.toFixed(4)} ETH`;
+      ctx.font = "700 18px monospace";
+      ctx.fillStyle = netEth >= 0 ? "#00ff8880" : "#ff444480";
+      ctx.fillText(ethLabel, 40, 275);
+    }
+
+    // Stats row
+    const statsY = hasEth ? 320 : 305;
+    const statsData = [
+      { label: "TOTAL BETS", value: totalBets.toString(), color: "#f0f0f5" },
+      { label: "WINS", value: wins.length.toString(), color: "#00ff88" },
+      { label: "LOSSES", value: losses.length.toString(), color: "#ff4444" },
+      { label: "WIN RATE", value: `${winRate}%`, color: winRate >= 50 ? "#c8ff00" : "#ff6b6b" },
+      { label: "NFTs WON", value: `+${nftsWon}`, color: "#00ff88" },
+    ];
+
+    const colW = 150;
+    statsData.forEach((s, i) => {
+      const x = 40 + i * colW;
+      ctx.font = "700 9px monospace";
+      ctx.fillStyle = "#55556a";
+      ctx.letterSpacing = "1px";
+      ctx.fillText(s.label, x, statsY);
+      ctx.font = "900 16px monospace";
+      ctx.fillStyle = s.color;
+      ctx.fillText(s.value, x, statsY + 22);
+    });
+
+    // Divider
+    ctx.strokeStyle = "#1a1a2c";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(40, 380);
+    ctx.lineTo(760, 380);
+    ctx.stroke();
+
+    // Footer
+    ctx.font = "700 10px monospace";
+    ctx.fillStyle = "#333345";
+    ctx.letterSpacing = "1px";
+    ctx.fillText("cambrilio.xyz  •  Base Network  •  Powered by Chainlink VRF", 40, 400);
+    ctx.fillText(`Data from last ${totalBets} completed bets`, 40, 420);
+
+    // Download image
+    const dataUrl = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = "cambrilio-bet-pnl.png";
+    a.click();
+
+    // Open Twitter intent
+    const ethLine = hasEth ? `\n${netEth >= 0 ? "+" : ""}${netEth.toFixed(4)} ETH` : "";
+    const tweet = `My @Cambrilio Coinflip PNL:\n\n${netNfts >= 0 ? "+" : ""}${netNfts} NFTs${ethLine}\n${wins.length}W / ${losses.length}L (${winRate}% WR)\n\n🎰 ${totalBets} bets played on Cambrilio Bet\ncambrilio.xyz`;
+    const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
+    window.open(twitterUrl, "_blank", "noopener,noreferrer");
+  };
+
   // ═══ DATA LOADERS ═══
   const loadUserData = useCallback(async () => {
     if (!address) return;
@@ -340,7 +482,7 @@ export default function StakePage() {
       setBetRooms(rooms.filter(r => r.status === "waiting" || r.status === "active" || r.status === "flipping"));
       setMyCompletedBets(
         addrLower
-          ? rooms.filter(r => r.status === "complete" && (r.creator_wallet === addrLower || r.challenger_wallet === addrLower)).slice(-5).reverse()
+          ? rooms.filter(r => r.status === "complete" && (r.creator_wallet === addrLower || r.challenger_wallet === addrLower)).reverse()
           : []
       );
     } catch (e) { console.error("loadBetRooms", e); }
@@ -1737,7 +1879,13 @@ export default function StakePage() {
                 {/* ── MY RECENT COMPLETED BETS ── */}
                 {myCompletedBets.length > 0 && (
                   <div style={PS}>
-                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.white, letterSpacing: 2, marginBottom: 12 }}>RECENT RESULTS</h3>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                      <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "monospace", color: T.white, letterSpacing: 2, margin: 0 }}>RECENT RESULTS</h3>
+                      <button onClick={sharePNLCard} style={{ background: "#000", border: "1px solid #333", borderRadius: 8, padding: "8px 14px", fontSize: 9, fontWeight: 700, fontFamily: "monospace", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="white"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.742l7.737-8.835L1.254 2.25H8.08l4.261 5.636 5.903-5.636zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                        SHARE PNL
+                      </button>
+                    </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       {myCompletedBets.map(bet => {
                         const iWon = bet.winner_wallet?.toLowerCase() === address?.toLowerCase();

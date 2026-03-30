@@ -5,30 +5,17 @@ export async function GET() {
   try {
     const sb = getServiceSupabase();
 
-    // Source of truth: count active stakes directly from the stakes table
-    let allStakes: { wallet_address: string; token_id: string }[] = [];
-    let page = 0;
-    const pageSize = 1000;
+    // Source of truth: group active stakes by wallet directly in the database
+    const { data: grouped, error } = await sb
+      .rpc("get_active_stakes_by_wallet");
 
-    while (true) {
-      const { data: batch } = await sb
-        .from("stakes")
-        .select("wallet_address, token_id")
-        .eq("is_active", true)
-        .range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error) throw new Error(error.message);
 
-      if (!batch || batch.length === 0) break;
-      allStakes = allStakes.concat(batch);
-      if (batch.length < pageSize) break;
-      page++;
-    }
-
-    const totalNFTsStaked = allStakes.length;
-
-    // Group by wallet to get per-wallet stake count
     const walletMap = new Map<string, number>();
-    for (const s of allStakes) {
-      walletMap.set(s.wallet_address, (walletMap.get(s.wallet_address) || 0) + 1);
+    let totalNFTsStaked = 0;
+    for (const row of grouped || []) {
+      walletMap.set(row.wallet_address, row.stake_count);
+      totalNFTsStaked += row.stake_count;
     }
 
     // Get stakers balance data for wallets that have active stakes
