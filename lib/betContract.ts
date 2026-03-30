@@ -17,21 +17,29 @@ export const BET_ABI = [
   {
     name: "createRoom",
     type: "function",
-    stateMutability: "nonpayable",
+    stateMutability: "payable",
     inputs: [
       { name: "tokenIds", type: "uint256[]" },
       { name: "choice",   type: "uint8" },
+      { name: "name",     type: "string" },
     ],
     outputs: [],
   },
   {
     name: "joinRoom",
     type: "function",
-    stateMutability: "nonpayable",
+    stateMutability: "payable",
     inputs: [
       { name: "roomId",   type: "uint256" },
       { name: "tokenIds", type: "uint256[]" },
     ],
+    outputs: [],
+  },
+  {
+    name: "withdrawFees",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "to", type: "address" }],
     outputs: [],
   },
   {
@@ -85,6 +93,8 @@ export const BET_ABI = [
       { name: "creatorChoice", type: "uint8"   },
       { name: "createdAt",     type: "uint256" },
       { name: "activatedAt",   type: "uint256" },
+      { name: "ethAmount",     type: "uint256" },
+      { name: "name",          type: "string"  },
     ],
   },
   {
@@ -112,6 +122,17 @@ export const BET_ABI = [
       { name: "coinResults",    type: "uint8[]"   },
       { name: "creatorChoices", type: "uint8[]"   },
       { name: "createdAts",     type: "uint256[]" },
+    ],
+  },
+  {
+    name: "getRecentRoomsExtra",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "count", type: "uint256" }],
+    outputs: [
+      { name: "ids",        type: "uint256[]" },
+      { name: "ethAmounts", type: "uint256[]" },
+      { name: "names",      type: "string[]"  },
     ],
   },
   {

@@ -60,6 +60,8 @@ interface BetRoom {
   coin_result: "heads" | "tails" | null;
   winner_wallet: string | null;
   created_at: string;
+  eth_amount: bigint; // 0n = NFT-only room
+  name: string;
 }
 
 // ═══ HELPERS ═══
@@ -222,6 +224,8 @@ export default function StakePage() {
   const [betNftCount, setBetNftCount] = useState<1 | 2 | 3 | "custom">(1);
   const [betCustomCount, setBetCustomCount] = useState("");
   const [betChoice, setBetChoice] = useState<"heads" | "tails">("heads");
+  const [betEthAmount, setBetEthAmount] = useState("");
+  const [betRoomName, setBetRoomName] = useState("");
   const [betSelectedIds, setBetSelectedIds] = useState<Set<string>>(new Set());
   const [betJoinRoomId, setBetJoinRoomId] = useState<bigint | null>(null);
   const [betJoinSelectedIds, setBetJoinSelectedIds] = useState<Set<string>>(new Set());
@@ -275,14 +279,23 @@ export default function StakePage() {
   const loadAdminData = useCallback(async () => { if (!address || !isAdmin) return; try { const res = await fetch(`/api/admin?wallet=${address}`); const data = await res.json(); setAdminData(data); } catch {} }, [address, isAdmin]);
   const loadBetRooms = useCallback(async () => {
     try {
-      const raw = await readContractSafe<[bigint[], `0x${string}`[], `0x${string}`[], number[], number[], `0x${string}`[], number[], number[], bigint[]]>({
-        address: BET_CONTRACT_ADDRESS,
-        abi: BET_ABI,
-        functionName: "getRecentRooms",
-        args: [BigInt(50)],
-      });
+      const [raw, rawExtra] = await Promise.all([
+        readContractSafe<[bigint[], `0x${string}`[], `0x${string}`[], number[], number[], `0x${string}`[], number[], number[], bigint[]]>({
+          address: BET_CONTRACT_ADDRESS,
+          abi: BET_ABI,
+          functionName: "getRecentRooms",
+          args: [BigInt(50)],
+        }),
+        readContractSafe<[bigint[], bigint[], string[]]>({
+          address: BET_CONTRACT_ADDRESS,
+          abi: BET_ABI,
+          functionName: "getRecentRoomsExtra",
+          args: [BigInt(50)],
+        }),
+      ]);
 
       const [ids, creators, challengers, nftCounts, statuses, winners, coinResults, creatorChoices, createdAts] = raw;
+      const [, ethAmounts, names] = rawExtra;
 
       const rooms: BetRoom[] = await Promise.all(
         ids.map(async (id, i) => {
@@ -316,6 +329,8 @@ export default function StakePage() {
             coin_result: status === "complete" ? choiceToSide(coinResults[i]) : null,
             winner_wallet: winner !== ZERO_ADDRESS ? winner : null,
             created_at: new Date(Number(createdAts[i]) * 1000).toISOString(),
+            eth_amount: ethAmounts[i],
+            name: names[i] || "",
           } as BetRoom;
         })
       );
@@ -588,11 +603,13 @@ export default function StakePage() {
     setCreatingBet(true);
     try {
       if (!(await ensureBetApproval())) return;
+      const ethWei = betEthAmount ? BigInt(Math.floor(parseFloat(betEthAmount) * 1e18)) : 0n;
       const txHash = await writeContractAsync({
         address: BET_CONTRACT_ADDRESS,
         abi: BET_ABI,
         functionName: "createRoom",
-        args: [ids.map(BigInt), sideToChoice(betChoice)],
+        args: [ids.map(BigInt), sideToChoice(betChoice), betRoomName.trim().slice(0, 32)],
+        value: ethWei,
       });
       showMsg("Tx submitted — waiting for confirmation...");
       await publicClient.waitForTransactionReceipt({ hash: txHash });
@@ -608,11 +625,14 @@ export default function StakePage() {
     setJoiningBet(true);
     try {
       if (!(await ensureBetApproval())) return;
+      const room = betRooms.find(r => r.id === roomId);
+      const ethWei = room?.eth_amount ?? 0n;
       const txHash = await writeContractAsync({
         address: BET_CONTRACT_ADDRESS,
         abi: BET_ABI,
         functionName: "joinRoom",
         args: [roomId, Array.from(betJoinSelectedIds).map(BigInt)],
+        value: ethWei,
       });
       showMsg("Tx submitted — waiting for confirmation...");
       await publicClient.waitForTransactionReceipt({ hash: txHash });
@@ -1442,7 +1462,46 @@ export default function StakePage() {
                       </div>
                     </div>
 
-                    {/* Step 3: select NFTs */}
+                    {/* Step 3: room name */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
+                        ROOM NAME <span style={{ color: T.grayK }}>(OPTIONAL · MAX 32 CHARS)</span>
+                      </div>
+                      <input
+                        type="text"
+                        maxLength={32}
+                        value={betRoomName}
+                        onChange={e => setBetRoomName(e.target.value)}
+                        placeholder="e.g. 3v3 High Stakes"
+                        style={inputStyle}
+                      />
+                    </div>
+
+                    {/* Step 4: optional ETH wager */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
+                        ETH WAGER <span style={{ color: T.grayK }}>(OPTIONAL)</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.001"
+                          value={betEthAmount}
+                          onChange={e => setBetEthAmount(e.target.value)}
+                          placeholder="0.00 ETH"
+                          style={{ ...inputStyle, width: 160 }}
+                        />
+                        <span style={{ fontSize: 10, fontFamily: "monospace", color: T.grayD }}>ETH</span>
+                      </div>
+                      {betEthAmount && parseFloat(betEthAmount) > 0 && (
+                        <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayK, marginTop: 4 }}>
+                          Challenger must match {betEthAmount} ETH · 5% fee on win
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Step 4: select NFTs */}
                     {resolvedBetCount > 0 && (
                       <div style={{ marginBottom: 14 }}>
                         <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
@@ -1506,8 +1565,12 @@ export default function StakePage() {
                         <div key={room.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 14 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
                             <div>
-                              <div style={{ fontSize: 11, fontWeight: 800, fontFamily: "monospace", color: T.white }}>{shortAddr(room.creator_wallet)}</div>
-                              <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 2 }}>wagering {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""} · #{room.creator_nft_ids.join(", #")}</div>
+                              <div style={{ fontSize: 11, fontWeight: 800, fontFamily: "monospace", color: T.white }}>{room.name || shortAddr(room.creator_wallet)}</div>
+                              {room.name && <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD }}>{shortAddr(room.creator_wallet)}</div>}
+                              <div style={{ fontSize: 9, fontFamily: "monospace", color: T.grayD, marginTop: 2 }}>
+                                wagering {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""} · #{room.creator_nft_ids.join(", #")}
+                                {room.eth_amount > 0n && <span style={{ marginLeft: 6, color: T.accent }}>+ {(Number(room.eth_amount) / 1e18).toFixed(4)} ETH</span>}
+                              </div>
                             </div>
                             <div style={{ textAlign: "right" }}>
                               <div style={{ fontSize: 10, fontWeight: 900, fontFamily: "monospace", color: room.creator_choice === "heads" ? T.gold : T.sweep }}>{room.creator_choice === "heads" ? "👑 HEADS" : "🌀 TAILS"}</div>
@@ -1552,7 +1615,7 @@ export default function StakePage() {
                                   disabled={joiningBet || betJoinSelectedIds.size !== room.nft_count}
                                   style={{ flex: 1, padding: "10px 0", background: (joiningBet || betJoinSelectedIds.size !== room.nft_count) ? T.grayK : T.accent, border: "none", borderRadius: 8, color: T.bg, fontSize: 11, fontWeight: 900, fontFamily: "monospace", cursor: (joiningBet || betJoinSelectedIds.size !== room.nft_count) ? "not-allowed" : "pointer" }}
                                 >
-                                  {joiningBet ? "JOINING..." : "CONFIRM JOIN"}
+                                  {joiningBet ? "JOINING..." : `CONFIRM JOIN${room.eth_amount > 0n ? ` · ${(Number(room.eth_amount) / 1e18).toFixed(4)} ETH` : ""}`}
                                 </button>
                                 <button onClick={() => { setBetJoinRoomId(null); setBetJoinSelectedIds(new Set()); }} style={{ padding: "10px 14px", background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, color: T.grayD, fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>CANCEL</button>
                               </div>

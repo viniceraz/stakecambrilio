@@ -62,6 +62,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         uint256   activatedAt;     // set when challenger joins
         uint256   vrfRequestId;    // non-zero once flip() is called
         uint256   ethAmount;       // ETH each player bets (0 = NFT-only room)
+        string    name;            // optional room name set by creator
         uint256[] creatorTokenIds;
         uint256[] challengerTokenIds;
     }
@@ -135,7 +136,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
      * @param tokenIds  Cambrilio token IDs to wager (1–20, no duplicates).
      * @param choice    0 = HEADS, 1 = TAILS.
      */
-    function createRoom(uint256[] calldata tokenIds, uint8 choice)
+    function createRoom(uint256[] calldata tokenIds, uint8 choice, string calldata name)
         external
         payable
         notPaused
@@ -144,6 +145,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         // ── Checks ──────────────────────────────────────────────
         require(tokenIds.length >= 1 && tokenIds.length <= 20, "1-20 NFTs");
         require(choice == HEADS || choice == TAILS, "Invalid choice");
+        require(bytes(name).length <= 32, "Name too long");
         _requireNoDuplicates(tokenIds);
 
         // ── Effects ─────────────────────────────────────────────
@@ -155,6 +157,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         r.status        = Status.Waiting;
         r.createdAt     = block.timestamp;
         r.ethAmount     = msg.value; // 0 se for só NFT
+        r.name          = name;
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             r.creatorTokenIds.push(tokenIds[i]);
@@ -373,13 +376,15 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
             uint8   coinResult,
             uint8   creatorChoice,
             uint256 createdAt,
-            uint256 activatedAt
+            uint256 activatedAt,
+            uint256 ethAmount,
+            string  memory name
         )
     {
         Room storage r = _rooms[roomId];
         return (
             r.creator, r.challenger, r.nftCount, uint8(r.status),
-            r.winner, r.coinResult, r.creatorChoice, r.createdAt, r.activatedAt
+            r.winner, r.coinResult, r.creatorChoice, r.createdAt, r.activatedAt, r.ethAmount, r.name
         );
     }
 
@@ -435,6 +440,33 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
             coinResults[i]    = r.coinResult;
             creatorChoices[i] = r.creatorChoice;
             createdAts[i]     = r.createdAt;
+        }
+    }
+
+    /// @notice Returns ethAmount and name for the most recent `count` rooms (complements getRecentRooms).
+    function getRecentRoomsExtra(uint256 count)
+        external
+        view
+        returns (
+            uint256[] memory ids,
+            uint256[] memory ethAmounts,
+            string[]  memory names
+        )
+    {
+        uint256 total = roomCount;
+        uint256 start = total > count ? total - count : 0;
+        uint256 len   = total - start;
+
+        ids        = new uint256[](len);
+        ethAmounts = new uint256[](len);
+        names      = new string[](len);
+
+        for (uint256 i = 0; i < len; i++) {
+            uint256 rid    = start + i;
+            Room storage r = _rooms[rid];
+            ids[i]        = rid;
+            ethAmounts[i] = r.ethAmount;
+            names[i]      = r.name;
         }
     }
 
