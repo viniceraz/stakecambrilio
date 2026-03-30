@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useSignMessage, useWriteContract } from "wagmi";
 import { getOwnedCambrilios, checkListedClient, OwnedNFT } from "@/lib/blockchain";
@@ -235,6 +235,7 @@ export default function StakePage() {
   const [flipResult, setFlipResult] = useState<{ roomId: bigint; result: "heads" | "tails"; winner: string; creatorChoice: "heads" | "tails" } | null>(null);
   const [coinPhase, setCoinPhase] = useState<"idle" | "spinning" | "landed">("idle");
   const [betApproved, setBetApproved] = useState(false);
+  const prevRoomStatusRef = useRef<Map<string, string>>(new Map());
 
   // Mobile menu
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -345,22 +346,65 @@ export default function StakePage() {
     } catch (e) { console.error("loadBetRooms", e); }
   }, [address]);
 
+  // Detecta quando a room do usuário entra em "flipping" para mostrar overlay ao challenger
+  useEffect(() => {
+    if (!address || coinPhase !== "idle") return;
+    const addrLower = address.toLowerCase();
+    const myRoom = betRooms.find(r => r.creator_wallet === addrLower || r.challenger_wallet === addrLower);
+    if (!myRoom) return;
+
+    const roomKey = String(myRoom.id);
+    const prev = prevRoomStatusRef.current.get(roomKey);
+    prevRoomStatusRef.current.set(roomKey, myRoom.status);
+
+    if (myRoom.status === "flipping" && prev !== "flipping") {
+      setCoinPhase("spinning");
+      // Polling para pegar o resultado
+      let attempts = 0;
+      const poll = async (): Promise<void> => {
+        if (attempts++ > 40) { setCoinPhase("idle"); return; }
+        await new Promise(r => setTimeout(r, 2000));
+        const roomData = await readContractSafe<[string, string, number, number, string, number, number, bigint, bigint]>({
+          address: BET_CONTRACT_ADDRESS,
+          abi: BET_ABI,
+          functionName: "getRoom",
+          args: [myRoom.id],
+        });
+        const [,,,status, winner, coinResult, creatorChoice] = roomData;
+        if (status === 3) {
+          setCoinPhase("landed");
+          setFlipResult({
+            roomId: myRoom.id,
+            result: choiceToSide(coinResult as number),
+            winner: (winner as string).toLowerCase(),
+            creatorChoice: choiceToSide(creatorChoice as number),
+          });
+          loadBetRooms();
+        } else {
+          return poll();
+        }
+      };
+      poll();
+    }
+  }, [betRooms, address, coinPhase, loadBetRooms]);
+
   useEffect(() => { loadLeaderboard(); loadStore(); loadBurnData(); fetch("/api/verify", { method: "POST" }).catch(() => {}); supabase.from("settings").select("value").eq("key", "stake_enabled").single().then(({ data }) => setStakeEnabled(data?.value === "true")); supabase.from("settings").select("value").eq("key", "transfer_enabled").single().then(({ data }) => setTransferEnabled(data?.value !== "false")); }, []);
   useEffect(() => { if (isConnected && address) { loadUserData(); loadBurnData(); loadLeaderboard(); } }, [isConnected, address, loadUserData, loadBurnData, loadLeaderboard]);
   useEffect(() => { if (isAdmin && tab === "admin") loadAdminData(); }, [isAdmin, tab, loadAdminData]);
   useEffect(() => { if (tab === "dashboard") loadLeaderboard(); }, [tab, loadLeaderboard]);
   useEffect(() => {
-    if (tab === "bet") {
-      loadBetRooms();
-      if (address) {
-        readContractSafe<boolean>({
-          address: NFT_CONTRACT_ADDRESS,
-          abi: ERC721_ABI,
-          functionName: "isApprovedForAll",
-          args: [address as `0x${string}`, BET_CONTRACT_ADDRESS],
-        }).then(approved => setBetApproved(!!approved)).catch(() => {});
-      }
+    if (tab !== "bet") return;
+    loadBetRooms();
+    if (address) {
+      readContractSafe<boolean>({
+        address: NFT_CONTRACT_ADDRESS,
+        abi: ERC721_ABI,
+        functionName: "isApprovedForAll",
+        args: [address as `0x${string}`, BET_CONTRACT_ADDRESS],
+      }).then(approved => setBetApproved(!!approved)).catch(() => {});
     }
+    const interval = setInterval(loadBetRooms, 3000);
+    return () => clearInterval(interval);
   }, [tab, loadBetRooms, address]);
 
   // ═══ STAKE HANDLERS ═══
