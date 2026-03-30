@@ -371,18 +371,32 @@ export default function StakePage() {
     ctx.fillText("cambrilio.xyz  •  Base Network  •  Powered by Chainlink VRF", 40, 400);
     ctx.fillText(`Data from last ${totalBets} completed bets`, 40, 420);
 
-    // Download image
-    const dataUrl = canvas.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = dataUrl;
-    a.download = "cambrilio-bet-pnl.png";
-    a.click();
+    // Draw character image on the right side
+    const charImg = new Image();
+    charImg.src = "/pnl-character.png";
+    const finalize = () => {
+      const dataUrl = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = "cambrilio-bet-pnl.png";
+      a.click();
 
-    // Open Twitter intent
+      // Open Twitter intent
     const ethLine = hasEth ? `\n${netEth >= 0 ? "+" : ""}${netEth.toFixed(4)} ETH` : "";
     const tweet = `My @Cambrilio Coinflip PNL:\n\n${netNfts >= 0 ? "+" : ""}${netNfts} NFTs${ethLine}\n${wins.length}W / ${losses.length}L (${winRate}% WR)\n\n🎰 ${totalBets} bets played on Cambrilio Bet\ncambrilio.xyz`;
-    const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
-    window.open(twitterUrl, "_blank", "noopener,noreferrer");
+      const twitterUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
+      window.open(twitterUrl, "_blank", "noopener,noreferrer");
+    };
+
+    charImg.onload = () => {
+      const imgH = 190;
+      const imgW = Math.round(charImg.naturalWidth * (imgH / charImg.naturalHeight));
+      const imgX = 800 - imgW - 10;
+      const imgY = 95;
+      ctx.drawImage(charImg, imgX, imgY, imgW, imgH);
+      finalize();
+    };
+    charImg.onerror = () => finalize();
   };
 
   // ═══ DATA LOADERS ═══
