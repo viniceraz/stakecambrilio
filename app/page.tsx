@@ -610,7 +610,7 @@ export default function StakePage() {
         functionName: "createRoom",
         args: [ids.map(BigInt), sideToChoice(betChoice), betRoomName.trim().slice(0, 32)],
         value: ethWei,
-      });
+      } as any);
       showMsg("Tx submitted — waiting for confirmation...");
       await publicClient.waitForTransactionReceipt({ hash: txHash });
       showMsg("Bet room created! Waiting for a challenger...");
@@ -633,7 +633,7 @@ export default function StakePage() {
         functionName: "joinRoom",
         args: [roomId, Array.from(betJoinSelectedIds).map(BigInt)],
         value: ethWei,
-      });
+      } as any);
       showMsg("Tx submitted — waiting for confirmation...");
       await publicClient.waitForTransactionReceipt({ hash: txHash });
       showMsg("Joined! Both players are ready — flip the coin!");
