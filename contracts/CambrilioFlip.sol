@@ -34,7 +34,8 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
     // ─── CHAINLINK VRF CONFIG ────────────────────────────────────
     bytes32 public immutable keyHash;
     uint256 public immutable subscriptionId;
-    uint32  public constant  CALLBACK_GAS_LIMIT    = 500_000;
+    uint32  public constant  CALLBACK_GAS_BASE      = 200_000;  // overhead fixo do callback
+    uint32  public constant  CALLBACK_GAS_PER_NFT   = 100_000;  // por transferFrom (creator + challenger)
     uint16  public constant  REQUEST_CONFIRMATIONS = 3;
 
     // ─── STATE ───────────────────────────────────────────────────
@@ -60,12 +61,15 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         uint256   createdAt;
         uint256   activatedAt;     // set when challenger joins
         uint256   vrfRequestId;    // non-zero once flip() is called
+        uint256   ethAmount;       // ETH each player bets (0 = NFT-only room)
         uint256[] creatorTokenIds;
         uint256[] challengerTokenIds;
     }
 
     mapping(uint256 => Room)    private _rooms;
     mapping(uint256 => uint256) public  vrfRequestToRoom; // requestId → roomId
+
+    uint256 public pendingFees; // ETH acumulado de taxas (5% de cada aposta)
 
     // ─── EVENTS ──────────────────────────────────────────────────
     event RoomCreated(
@@ -133,6 +137,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
      */
     function createRoom(uint256[] calldata tokenIds, uint8 choice)
         external
+        payable
         notPaused
         noReentrancy
     {
@@ -149,6 +154,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         r.creatorChoice = choice;
         r.status        = Status.Waiting;
         r.createdAt     = block.timestamp;
+        r.ethAmount     = msg.value; // 0 se for só NFT
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             r.creatorTokenIds.push(tokenIds[i]);
@@ -169,6 +175,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
      */
     function joinRoom(uint256 roomId, uint256[] calldata tokenIds)
         external
+        payable
         notPaused
         noReentrancy
     {
@@ -177,6 +184,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         require(r.status == Status.Waiting,    "Room not open");
         require(msg.sender != r.creator,       "Cannot join own room");
         require(tokenIds.length == r.nftCount, "Wrong NFT count");
+        require(msg.value == r.ethAmount,      "Wrong ETH amount");
         _requireNoDuplicates(tokenIds);
 
         // ── Effects ─────────────────────────────────────────────
@@ -213,12 +221,15 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         r.status = Status.Flipping;
 
         // ── Interactions (Chainlink VRF) ──────────────────────────
+        // Gas dinâmico: base + 2 transfers por NFT (creator e challenger)
+        uint32 callbackGas = CALLBACK_GAS_BASE + CALLBACK_GAS_PER_NFT * uint32(r.nftCount) * 2;
+
         uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash:             keyHash,
                 subId:               subscriptionId,
                 requestConfirmations: REQUEST_CONFIRMATIONS,
-                callbackGasLimit:    CALLBACK_GAS_LIMIT,
+                callbackGasLimit:    callbackGas,
                 numWords:            1,
                 extraArgs:           VRFV2PlusClient._argsToBytes(
                     VRFV2PlusClient.ExtraArgsV1({ nativePayment: false })
@@ -270,6 +281,16 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
             allTokens[idx++] = r.challengerTokenIds[i];
         }
 
+        // Transfere ETH ao vencedor descontando 5% de taxa
+        if (r.ethAmount > 0) {
+            uint256 totalEth  = r.ethAmount * 2;
+            uint256 fee       = totalEth * 5 / 100;
+            uint256 winnerEth = totalEth - fee;
+            pendingFees += fee;
+            (bool ok,) = winner.call{value: winnerEth}("");
+            require(ok, "ETH transfer failed");
+        }
+
         emit FlipResult(roomId, result, winner, allTokens);
     }
 
@@ -289,6 +310,11 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         // ── Interactions ─────────────────────────────────────────
         for (uint256 i = 0; i < r.creatorTokenIds.length; i++) {
             nftContract.transferFrom(address(this), r.creator, r.creatorTokenIds[i]);
+        }
+
+        if (r.ethAmount > 0) {
+            (bool ok,) = r.creator.call{value: r.ethAmount}("");
+            require(ok, "ETH refund failed");
         }
 
         emit RoomCancelled(roomId, msg.sender);
@@ -320,6 +346,13 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         }
         for (uint256 i = 0; i < r.challengerTokenIds.length; i++) {
             nftContract.transferFrom(address(this), r.challenger, r.challengerTokenIds[i]);
+        }
+
+        if (r.ethAmount > 0) {
+            (bool ok1,) = r.creator.call{value: r.ethAmount}("");
+            require(ok1, "ETH refund creator failed");
+            (bool ok2,) = r.challenger.call{value: r.ethAmount}("");
+            require(ok2, "ETH refund challenger failed");
         }
 
         emit RoomExpired(roomId);
@@ -410,6 +443,16 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
 
     function setPaused(bool _paused) external onlyOwner {
         paused = _paused;
+    }
+
+    /// @notice Saca as taxas acumuladas (5% de cada aposta ETH) para uma carteira.
+    function withdrawFees(address to) external onlyOwner noReentrancy {
+        require(to != address(0), "Zero address");
+        uint256 amount = pendingFees;
+        require(amount > 0, "No fees");
+        pendingFees = 0;
+        (bool ok,) = to.call{value: amount}("");
+        require(ok, "Withdraw failed");
     }
 
     /**
