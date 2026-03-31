@@ -11,6 +11,9 @@ export const NFT_CONTRACT_ADDRESS = (
   process.env.NEXT_PUBLIC_NFT_CONTRACT || "0x0000000000000000000000000000000000000000"
 ) as `0x${string}`;
 
+// Fee de protocolo por jogador (deve espelhar PROTOCOL_FEE no contrato)
+export const PROTOCOL_FEE = 240_000_000_000_000n; // 0.00024 ETH em wei
+
 // ─── CambrilioFlip ABI ────────────────────────────────────────────────────────
 export const BET_ABI = [
   // ── Write ──

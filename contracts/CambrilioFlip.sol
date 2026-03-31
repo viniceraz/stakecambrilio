@@ -35,8 +35,11 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
     bytes32 public immutable keyHash;
     uint256 public immutable subscriptionId;
     uint32  public constant  CALLBACK_GAS_BASE      = 200_000;  // overhead fixo do callback
-    uint32  public constant  CALLBACK_GAS_PER_NFT   = 100_000;  // por transferFrom (creator + challenger)
+    uint32  public constant  CALLBACK_GAS_PER_NFT   = 65_000;   // por transferFrom (creator + challenger)
     uint16  public constant  REQUEST_CONFIRMATIONS = 3;
+
+    // ─── PROTOCOL FEE ────────────────────────────────────────────
+    uint256 public constant  PROTOCOL_FEE           = 0.00024 ether; // por jogador, por sala
 
     // ─── STATE ───────────────────────────────────────────────────
     IERC721 public immutable nftContract;
@@ -146,6 +149,7 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         require(tokenIds.length >= 1 && tokenIds.length <= 20, "1-20 NFTs");
         require(choice == HEADS || choice == TAILS, "Invalid choice");
         require(bytes(name).length <= 32, "Name too long");
+        require(msg.value >= PROTOCOL_FEE, "Protocol fee required");
         _requireNoDuplicates(tokenIds);
 
         // ── Effects ─────────────────────────────────────────────
@@ -156,8 +160,9 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         r.creatorChoice = choice;
         r.status        = Status.Waiting;
         r.createdAt     = block.timestamp;
-        r.ethAmount     = msg.value; // 0 se for só NFT
+        r.ethAmount     = msg.value - PROTOCOL_FEE; // desconta a fee do protocolo
         r.name          = name;
+        pendingFees    += PROTOCOL_FEE;
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             r.creatorTokenIds.push(tokenIds[i]);
@@ -184,16 +189,17 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
     {
         // ── Checks ──────────────────────────────────────────────
         Room storage r = _rooms[roomId];
-        require(r.status == Status.Waiting,    "Room not open");
-        require(msg.sender != r.creator,       "Cannot join own room");
-        require(tokenIds.length == r.nftCount, "Wrong NFT count");
-        require(msg.value == r.ethAmount,      "Wrong ETH amount");
+        require(r.status == Status.Waiting,                "Room not open");
+        require(msg.sender != r.creator,                   "Cannot join own room");
+        require(tokenIds.length == r.nftCount,             "Wrong NFT count");
+        require(msg.value == r.ethAmount + PROTOCOL_FEE,   "Wrong ETH amount");
         _requireNoDuplicates(tokenIds);
 
         // ── Effects ─────────────────────────────────────────────
         r.challenger  = msg.sender;
         r.status      = Status.Active;
         r.activatedAt = block.timestamp;
+        pendingFees  += PROTOCOL_FEE;
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             r.challengerTokenIds.push(tokenIds[i]);
@@ -310,13 +316,17 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         // ── Effects ─────────────────────────────────────────────
         r.status = Status.Cancelled;
 
+        uint256 feeRefund = PROTOCOL_FEE * 95 / 100; // 95% devolvido, 5% fica no contrato
+        pendingFees -= feeRefund;
+
         // ── Interactions ─────────────────────────────────────────
         for (uint256 i = 0; i < r.creatorTokenIds.length; i++) {
             nftContract.transferFrom(address(this), r.creator, r.creatorTokenIds[i]);
         }
 
-        if (r.ethAmount > 0) {
-            (bool ok,) = r.creator.call{value: r.ethAmount}("");
+        uint256 refundAmount = r.ethAmount + feeRefund;
+        if (refundAmount > 0) {
+            (bool ok,) = r.creator.call{value: refundAmount}("");
             require(ok, "ETH refund failed");
         }
 
@@ -343,6 +353,9 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
         // ── Effects ─────────────────────────────────────────────
         r.status = Status.Expired;
 
+        uint256 feeRefund = PROTOCOL_FEE * 95 / 100; // 95% devolvido a cada jogador
+        pendingFees -= feeRefund * 2;
+
         // ── Interactions ─────────────────────────────────────────
         for (uint256 i = 0; i < r.creatorTokenIds.length; i++) {
             nftContract.transferFrom(address(this), r.creator, r.creatorTokenIds[i]);
@@ -351,12 +364,12 @@ contract CambrilioFlip is VRFConsumerBaseV2Plus {
             nftContract.transferFrom(address(this), r.challenger, r.challengerTokenIds[i]);
         }
 
-        if (r.ethAmount > 0) {
-            (bool ok1,) = r.creator.call{value: r.ethAmount}("");
-            require(ok1, "ETH refund creator failed");
-            (bool ok2,) = r.challenger.call{value: r.ethAmount}("");
-            require(ok2, "ETH refund challenger failed");
-        }
+        uint256 creatorRefund     = r.ethAmount + feeRefund;
+        uint256 challengerRefund  = r.ethAmount + feeRefund;
+        (bool ok1,) = r.creator.call{value: creatorRefund}("");
+        require(ok1, "ETH refund creator failed");
+        (bool ok2,) = r.challenger.call{value: challengerRefund}("");
+        require(ok2, "ETH refund challenger failed");
 
         emit RoomExpired(roomId);
     }
