@@ -11,6 +11,16 @@ import {
   BET_ABI, ERC721_ABI,
   STATUS_MAP, choiceToSide, sideToChoice, ZERO_ADDRESS, PROTOCOL_FEE,
 } from "@/lib/betContract";
+import {
+  ROULETTE_CONTRACT_ADDRESS,
+  ROULETTE_ABI,
+  ROULETTE_STATUS_MAP,
+  RED as ROULETTE_RED, BLACK as ROULETTE_BLACK,
+  colorLabelFromResult,
+  PROTOCOL_FEE as ROULETTE_PROTOCOL_FEE,
+} from "@/lib/rouletteContract";
+import { RouletteWheel, RouletteResultBadge } from "@/components/RouletteWheel";
+import type { SpinResult } from "@/components/RouletteWheel";
 
 // ═══ THEME ═══
 const T = {
@@ -75,6 +85,22 @@ interface BetRoom {
   winner_wallet: string | null;
   created_at: string;
   eth_amount: bigint; // 0n = NFT-only room
+  name: string;
+}
+
+interface RouletteRoom {
+  id: bigint;
+  red_player: string;
+  black_player: string | null;
+  nft_count: number;
+  status: "waiting" | "active" | "spinning" | "complete" | "cancelled" | "expired";
+  red_nft_ids: string[];
+  black_nft_ids: string[];
+  spin_slot: number | null;
+  spin_result: "red" | "black" | "green" | null;
+  winner_wallet: string | null;
+  created_at: string;
+  eth_amount: bigint;
   name: string;
 }
 
@@ -165,7 +191,7 @@ export default function StakePage() {
   }) => Promise<`0x${string}`>;
 
   // Tab
-  const [tab, setTab] = useState<"stake" | "store" | "burn" | "dashboard" | "admin" | "bet">("stake");
+  const [tab, setTab] = useState<"stake" | "store" | "burn" | "dashboard" | "admin" | "bet" | "roulette">("stake");
 
   // Stake
   const [ownedNfts, setOwnedNfts] = useState<OwnedNFT[]>([]);
@@ -254,6 +280,27 @@ export default function StakePage() {
   const [coinPhase, setCoinPhase] = useState<"idle" | "spinning" | "landed">("idle");
   const [betApproved, setBetApproved] = useState(false);
   const prevRoomStatusRef = useRef<Map<string, string>>(new Map());
+
+  // Roulette
+  const [rouletteRooms, setRouletteRooms] = useState<RouletteRoom[]>([]);
+  const [myCompletedRoulettes, setMyCompletedRoulettes] = useState<RouletteRoom[]>([]);
+  const [rouletteNftCount, setRouletteNftCount] = useState<1 | 2 | 3 | "custom">(1);
+  const [rouletteCustomCount, setRouletteCustomCount] = useState("");
+  const [rouletteColor, setRouletteColor] = useState<"red" | "black">("red");
+  const [rouletteEthAmount, setRouletteEthAmount] = useState("");
+  const [rouletteRoomName, setRouletteRoomName] = useState("");
+  const [rouletteSelectedIds, setRouletteSelectedIds] = useState<Set<string>>(new Set());
+  const [rouletteJoinRoomId, setRouletteJoinRoomId] = useState<bigint | null>(null);
+  const [rouletteJoinSelectedIds, setRouletteJoinSelectedIds] = useState<Set<string>>(new Set());
+  const [creatingRoulette, setCreatingRoulette] = useState(false);
+  const [joiningRoulette, setJoiningRoulette] = useState(false);
+  const [spinningRoulette, setSpinningRoulette] = useState(false);
+  const [rouletteApproved, setRouletteApproved] = useState(false);
+  const [wheelSpinning, setWheelSpinning] = useState(false);
+  const [wheelTargetSlot, setWheelTargetSlot] = useState<number | undefined>(undefined);
+  const [wheelDone, setWheelDone] = useState(false);
+  const [wheelResult, setWheelResult] = useState<{ roomId: bigint; slot: number; winner: string; result: "red" | "black" | "green" } | null>(null);
+  const prevRouletteStatusRef = useRef<Map<string, string>>(new Map());
 
   // Mobile menu
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -649,6 +696,75 @@ export default function StakePage() {
     } catch (e) { console.error("loadBetRooms", e); }
   }, [address]);
 
+  const loadRouletteRooms = useCallback(async () => {
+    try {
+      const [raw, rawExtra] = await Promise.all([
+        readContractSafe<[bigint[], `0x${string}`[], `0x${string}`[], number[], number[], `0x${string}`[], number[], number[], bigint[]]>({
+          address: ROULETTE_CONTRACT_ADDRESS,
+          abi: ROULETTE_ABI,
+          functionName: "getRecentRooms",
+          args: [BigInt(50)],
+        }),
+        readContractSafe<[bigint[], bigint[], string[]]>({
+          address: ROULETTE_CONTRACT_ADDRESS,
+          abi: ROULETTE_ABI,
+          functionName: "getRecentRoomsExtra",
+          args: [BigInt(50)],
+        }),
+      ]);
+
+      const [ids, redPlayers, blackPlayers, nftCounts, statuses, winners, results, spinSlots, createdAts] = raw;
+      const [, ethAmounts, names] = rawExtra;
+
+      const rooms: RouletteRoom[] = await Promise.all(
+        ids.map(async (id, i) => {
+          const status = ROULETTE_STATUS_MAP[statuses[i]] ?? "cancelled";
+          let redTokenIds: string[] = [];
+          let blackTokenIds: string[] = [];
+
+          if (status === "waiting" || status === "active") {
+            try {
+              const tokenData = await readContractSafe<[bigint[], bigint[]]>({
+                address: ROULETTE_CONTRACT_ADDRESS,
+                abi: ROULETTE_ABI,
+                functionName: "getRoomTokenIds",
+                args: [id],
+              });
+              redTokenIds = tokenData[0].map(String);
+              blackTokenIds = tokenData[1].map(String);
+            } catch {}
+          }
+
+          const winner = winners[i].toLowerCase();
+          const blackAddr = blackPlayers[i].toLowerCase();
+          return {
+            id,
+            red_player: redPlayers[i].toLowerCase(),
+            black_player: blackAddr !== ZERO_ADDRESS ? blackAddr : null,
+            nft_count: nftCounts[i],
+            status,
+            red_nft_ids: redTokenIds,
+            black_nft_ids: blackTokenIds,
+            spin_slot: status === "complete" ? spinSlots[i] : null,
+            spin_result: status === "complete" ? colorLabelFromResult(results[i]) : null,
+            winner_wallet: winner !== ZERO_ADDRESS ? winner : null,
+            created_at: new Date(Number(createdAts[i]) * 1000).toISOString(),
+            eth_amount: ethAmounts[i],
+            name: names[i] || "",
+          } as RouletteRoom;
+        })
+      );
+
+      const addrLower = address?.toLowerCase();
+      setRouletteRooms(rooms.filter(r => r.status === "waiting" || r.status === "active" || r.status === "spinning"));
+      setMyCompletedRoulettes(
+        addrLower
+          ? rooms.filter(r => r.status === "complete" && (r.red_player === addrLower || r.black_player === addrLower)).reverse()
+          : []
+      );
+    } catch (e) { console.error("loadRouletteRooms", e); }
+  }, [address]);
+
   // Detecta quando a room do usuário entra em "flipping" para mostrar overlay ao challenger
   useEffect(() => {
     if (!address || coinPhase !== "idle") return;
@@ -716,6 +832,65 @@ export default function StakePage() {
     const interval = setInterval(loadBetRooms, 3000);
     return () => clearInterval(interval);
   }, [tab, loadBetRooms, address]);
+
+  useEffect(() => {
+    if (tab !== "roulette") return;
+    loadRouletteRooms();
+    if (address) {
+      readContractSafe<boolean>({
+        address: NFT_CONTRACT_ADDRESS,
+        abi: ERC721_ABI,
+        functionName: "isApprovedForAll",
+        args: [address as `0x${string}`, ROULETTE_CONTRACT_ADDRESS],
+      }).then(approved => setRouletteApproved(!!approved)).catch(() => {});
+    }
+    const interval = setInterval(loadRouletteRooms, 3000);
+    return () => clearInterval(interval);
+  }, [tab, loadRouletteRooms, address]);
+
+  // Detecta quando a room do usuário entra em "spinning" para mostrar wheel overlay ao challenger
+  useEffect(() => {
+    if (!address || wheelSpinning || wheelTargetSlot !== undefined) return;
+    const addrLower = address.toLowerCase();
+    const myRoom = rouletteRooms.find(r => r.red_player === addrLower || r.black_player === addrLower);
+    if (!myRoom) return;
+
+    const roomKey = String(myRoom.id);
+    const prev = prevRouletteStatusRef.current.get(roomKey);
+    prevRouletteStatusRef.current.set(roomKey, myRoom.status);
+
+    if (myRoom.status === "spinning" && prev !== "spinning") {
+      setWheelSpinning(true);
+      setWheelTargetSlot(undefined);
+      setWheelDone(false);
+      let attempts = 0;
+      const poll = async (): Promise<void> => {
+        if (attempts++ > 40) { setWheelSpinning(false); return; }
+        await new Promise(r => setTimeout(r, 2000));
+        const roomData = await readContractSafe<[string, string, number, number, string, number, number, bigint, bigint, bigint, string]>({
+          address: ROULETTE_CONTRACT_ADDRESS,
+          abi: ROULETTE_ABI,
+          functionName: "getRoom",
+          args: [myRoom.id],
+        });
+        const [,,,status, winner, result, spinSlot] = roomData;
+        if (Number(status) === 3) {
+          setWheelSpinning(false);
+          setWheelTargetSlot(Number(spinSlot));
+          setWheelResult({
+            roomId: myRoom.id,
+            slot: Number(spinSlot),
+            winner: (winner as string).toLowerCase(),
+            result: colorLabelFromResult(Number(result)),
+          });
+          loadRouletteRooms();
+        } else {
+          return poll();
+        }
+      };
+      poll();
+    }
+  }, [rouletteRooms, address, wheelSpinning, wheelTargetSlot, loadRouletteRooms]);
 
   // ═══ STAKE HANDLERS ═══
   const handleStake = async () => {
@@ -1086,6 +1261,163 @@ export default function StakePage() {
     } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
   };
 
+  // ═══ ROULETTE HANDLERS (on-chain) ═══
+  const resolvedRouletteCount = rouletteNftCount === "custom" ? parseInt(rouletteCustomCount || "0") : rouletteNftCount;
+
+  const ensureRouletteApproval = async (): Promise<boolean> => {
+    if (!address) return false;
+    try {
+      const approved = await readContractSafe<boolean>({
+        address: NFT_CONTRACT_ADDRESS,
+        abi: ERC721_ABI,
+        functionName: "isApprovedForAll",
+        args: [address as `0x${string}`, ROULETTE_CONTRACT_ADDRESS],
+      });
+      if (approved) { setRouletteApproved(true); return true; }
+      showMsg("Approve NFT contract first — confirm in wallet", "ok");
+      const txHash = await writeContractAsync({
+        address: NFT_CONTRACT_ADDRESS,
+        abi: ERC721_ABI,
+        functionName: "setApprovalForAll",
+        args: [ROULETTE_CONTRACT_ADDRESS, true],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      setRouletteApproved(true);
+      return true;
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); return false; }
+  };
+
+  const handleCreateRoulette = async () => {
+    if (!address || rouletteSelectedIds.size === 0) return;
+    const ids = Array.from(rouletteSelectedIds);
+    if (ids.length !== resolvedRouletteCount) { showMsg(`Select exactly ${resolvedRouletteCount} NFT(s) to wager`, "err"); return; }
+    setCreatingRoulette(true);
+    try {
+      if (!(await ensureRouletteApproval())) return;
+      const ethWei = rouletteEthAmount ? BigInt(Math.floor(parseFloat(rouletteEthAmount) * 1e18)) : 0n;
+      const colorNum = rouletteColor === "red" ? ROULETTE_RED : ROULETTE_BLACK;
+      const txHash = await writeContractAsync({
+        address: ROULETTE_CONTRACT_ADDRESS,
+        abi: ROULETTE_ABI,
+        functionName: "createRoom",
+        args: [ids.map(BigInt), colorNum, rouletteRoomName.trim().slice(0, 32)],
+        value: ethWei + ROULETTE_PROTOCOL_FEE,
+      } as any);
+      showMsg("Tx submitted — waiting for confirmation...");
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Roulette room created! Waiting for a challenger...");
+      setRouletteSelectedIds(new Set());
+      await loadRouletteRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+    finally { setCreatingRoulette(false); }
+  };
+
+  const handleJoinRoulette = async (roomId: bigint) => {
+    if (!address || rouletteJoinSelectedIds.size === 0) return;
+    setJoiningRoulette(true);
+    try {
+      if (!(await ensureRouletteApproval())) return;
+      const room = rouletteRooms.find(r => r.id === roomId);
+      const ethWei = room?.eth_amount ?? 0n;
+      const txHash = await writeContractAsync({
+        address: ROULETTE_CONTRACT_ADDRESS,
+        abi: ROULETTE_ABI,
+        functionName: "joinRoom",
+        args: [roomId, Array.from(rouletteJoinSelectedIds).map(BigInt)],
+        value: ethWei + ROULETTE_PROTOCOL_FEE,
+      } as any);
+      showMsg("Tx submitted — waiting for confirmation...");
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Joined! Both players are ready — spin the wheel!");
+      setRouletteJoinRoomId(null);
+      setRouletteJoinSelectedIds(new Set());
+      await loadRouletteRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+    finally { setJoiningRoulette(false); }
+  };
+
+  const handleSpin = async (roomId: bigint) => {
+    if (!address) return;
+    setSpinningRoulette(true);
+    setWheelSpinning(true);
+    setWheelTargetSlot(undefined);
+    setWheelDone(false);
+    try {
+      const txHash = await writeContractAsync({
+        address: ROULETTE_CONTRACT_ADDRESS,
+        abi: ROULETTE_ABI,
+        functionName: "spin",
+        args: [roomId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      await loadRouletteRooms();
+
+      let attempts = 0;
+      const poll = async (): Promise<void> => {
+        if (attempts++ > 40) {
+          showMsg("VRF taking longer than expected — result will appear when confirmed", "ok");
+          setWheelSpinning(false);
+          return;
+        }
+        await new Promise(r => setTimeout(r, 2000));
+        const roomData = await readContractSafe<[string, string, number, number, string, number, number, bigint, bigint, bigint, string]>({
+          address: ROULETTE_CONTRACT_ADDRESS,
+          abi: ROULETTE_ABI,
+          functionName: "getRoom",
+          args: [roomId],
+        });
+        const [,,,status, winner, result, spinSlot] = roomData;
+        if (Number(status) === 3) {
+          setWheelSpinning(false);
+          setWheelTargetSlot(Number(spinSlot));
+          setWheelResult({
+            roomId,
+            slot: Number(spinSlot),
+            winner: (winner as string).toLowerCase(),
+            result: colorLabelFromResult(Number(result)),
+          });
+          await loadRouletteRooms();
+        } else {
+          return poll();
+        }
+      };
+      await poll();
+    } catch (err: any) {
+      showMsg(err.shortMessage || err.message, "err");
+      setWheelSpinning(false);
+    } finally { setSpinningRoulette(false); }
+  };
+
+  const handleCancelRoulette = async (roomId: bigint) => {
+    if (!address) return;
+    try {
+      const txHash = await writeContractAsync({
+        address: ROULETTE_CONTRACT_ADDRESS,
+        abi: ROULETTE_ABI,
+        functionName: "cancelRoom",
+        args: [roomId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Roulette room cancelled. NFTs returned to your wallet.");
+      await loadRouletteRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+  };
+
+  const handleRefundExpiredRoulette = async (roomId: bigint) => {
+    if (!address) return;
+    try {
+      const txHash = await writeContractAsync({
+        address: ROULETTE_CONTRACT_ADDRESS,
+        abi: ROULETTE_ABI,
+        functionName: "refundExpired",
+        args: [roomId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      showMsg("Room expired — NFTs returned to both players.");
+      await loadRouletteRooms();
+    } catch (err: any) { showMsg(err.shortMessage || err.message, "err"); }
+  };
+
   const toggleSelect = (id: string) => setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const selectAll = () => setSelectedIds(new Set(ownedNfts.filter(n => !stakedIds.has(n.tokenId) && !listedIds.has(n.tokenId)).map(n => n.tokenId)));
   const stakeableNfts = ownedNfts.filter(n => !stakedIds.has(n.tokenId) && !listedIds.has(n.tokenId));
@@ -1134,7 +1466,7 @@ export default function StakePage() {
           </div>
           {/* Desktop tabs */}
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 1 }}>
-            {(["stake", "store", "burn", "bet", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
+            {(["stake", "store", "burn", "bet", "roulette", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
               <button key={t} onClick={() => { setTab(t as any); setMobileMenu(false); }} className="nav-tab-desktop" style={{ background: "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 10, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 1.5, borderBottom: tab === t ? `2px solid ${T.accent}` : "2px solid transparent", padding: "6px 2px", whiteSpace: "nowrap", flexShrink: 0 }}>▸{t.toUpperCase()}</button>
             ))}
           </div>
@@ -1148,7 +1480,7 @@ export default function StakePage() {
         {/* Mobile dropdown */}
         {mobileMenu && (
           <div className="nav-mobile-menu" style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 0 12px", borderTop: `1px solid ${T.border}` }}>
-            {(["stake", "store", "burn", "bet", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
+            {(["stake", "store", "burn", "bet", "roulette", "dashboard", ...(isAdmin ? ["admin"] : [])] as const).map(t => (
               <button key={t} onClick={() => { setTab(t as any); setMobileMenu(false); }} style={{ background: tab === t ? `${T.accent}10` : "none", border: "none", cursor: "pointer", color: tab === t ? T.accent : T.grayD, fontSize: 12, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 2, padding: "10px 16px", textAlign: "left", borderRadius: 6, borderLeft: tab === t ? `3px solid ${T.accent}` : "3px solid transparent" }}>▸ {t.toUpperCase()}</button>
             ))}
           </div>
@@ -2113,6 +2445,391 @@ export default function StakePage() {
                                 {bet.coin_result?.toUpperCase()} · {bet.nft_count * 2} NFTs {iWon ? "won" : "lost"}
                               </div>
                               <div style={{ fontSize: 8, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>{new Date(bet.created_at).toLocaleString()}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        {/* ═══════════════ ROULETTE TAB ═══════════════ */}
+        {tab === "roulette" && (
+          <>
+            <h2 style={{ fontSize: 20, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 2, color: T.white, marginBottom: 4 }}>CAMBRILIO ROULETTE</h2>
+            <p style={{ fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginBottom: 20 }}>Wager your NFTs in a peer-to-peer roulette. Winner takes all — powered by Chainlink VRF.</p>
+
+            {!isConnected ? (
+              <div style={{ textAlign: "center", padding: 60 }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>🎡</div>
+                <div style={{ fontSize: 13, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 2 }}>CONNECT YOUR WALLET TO PLAY</div>
+              </div>
+            ) : (
+              <>
+                {/* ── ROULETTE WHEEL OVERLAY ── */}
+                {(wheelSpinning || wheelTargetSlot !== undefined) && (
+                  <div className="overlay-fade" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", backdropFilter: "blur(8px)", gap: 20 }}>
+                    <div style={{ fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 2, marginBottom: 4 }}>
+                      {wheelDone ? "RESULT" : "SPINNING..."}
+                    </div>
+
+                    <RouletteWheel
+                      spinning={wheelSpinning}
+                      targetSlot={wheelTargetSlot}
+                      onDone={(_res: SpinResult) => { setWheelDone(true); }}
+                    />
+
+                    {!wheelDone && (
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 14, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: T.white, letterSpacing: 2, marginBottom: 6 }}>WAITING FOR CHAINLINK VRF</div>
+                        <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>This may take ~30–60 seconds on Base</div>
+                      </div>
+                    )}
+
+                    {wheelDone && wheelResult && (
+                      <div className="result-pop" style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                        <RouletteResultBadge result={{ slot: wheelResult.slot, color: wheelResult.result }} />
+                        <div style={{ fontSize: 28, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 3, color: wheelResult.winner.toLowerCase() === address?.toLowerCase() ? T.success : T.burn }}>
+                          {wheelResult.winner.toLowerCase() === address?.toLowerCase() ? "YOU WIN!" : wheelResult.result === "green" ? "HOUSE WINS" : "YOU LOSE"}
+                        </div>
+                        {wheelResult.winner !== ZERO_ADDRESS && (
+                          <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>
+                            Winner: <span style={{ color: T.accent }}>{shortAddr(wheelResult.winner)}</span>
+                          </div>
+                        )}
+                        <button
+                          onClick={() => { setWheelTargetSlot(undefined); setWheelDone(false); setWheelResult(null); }}
+                          style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 28px", color: T.white, fontSize: 11, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer", letterSpacing: 1, marginTop: 8 }}
+                        >
+                          DISMISS
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── MY ACTIVE ROULETTE ROOM ── */}
+                {(() => {
+                  const addrLower = address?.toLowerCase();
+                  const myRoom = rouletteRooms.find(r => r.red_player === addrLower || r.black_player === addrLower);
+                  if (!myRoom) return null;
+                  const userColor = myRoom.red_player === addrLower ? "red" : "black";
+                  const userNftIds = userColor === "red" ? myRoom.red_nft_ids : myRoom.black_nft_ids;
+                  const opponentAddr = userColor === "red" ? myRoom.black_player : myRoom.red_player;
+                  const opponentNftIds = userColor === "red" ? myRoom.black_nft_ids : myRoom.red_nft_ids;
+                  return (
+                    <div style={{ ...PS, border: `1px solid ${myRoom.status === "active" ? T.accent : T.border}40` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 12, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: T.accent, letterSpacing: 1 }}>YOUR ROOM</div>
+                          <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginTop: 2 }}>ROOM #{String(myRoom.id)} {myRoom.name && `· "${myRoom.name}"`}</div>
+                        </div>
+                        <span style={{ padding: "3px 10px", borderRadius: 6, fontSize: 9, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", background: myRoom.status === "active" ? `${T.success}20` : myRoom.status === "spinning" ? `${T.sweep}20` : `${T.gold}20`, color: myRoom.status === "active" ? T.success : myRoom.status === "spinning" ? T.sweep : T.gold }}>
+                          {myRoom.status === "active" ? "⚡ READY TO SPIN" : myRoom.status === "spinning" ? "🔗 WAITING FOR VRF..." : "⏳ WAITING FOR CHALLENGER"}
+                        </span>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 10, alignItems: "center", marginBottom: 14 }}>
+                        {/* RED side */}
+                        <div style={{ background: T.card, borderRadius: 10, padding: 12, border: `1px solid ${userColor === "red" ? "#ef444440" : T.border}` }}>
+                          <div style={{ fontSize: 8, fontFamily: "'Share Tech Mono', monospace", color: "#ef4444", marginBottom: 4, fontWeight: 800 }}>🔴 RED {userColor === "red" && <span style={{ color: T.accent }}>· YOU</span>}</div>
+                          <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.white, wordBreak: "break-all" }}>{myRoom.red_player ? shortAddr(myRoom.red_player) : "—"}</div>
+                          <div style={{ fontSize: 9, color: T.accent, fontFamily: "'Share Tech Mono', monospace", marginTop: 4 }}>{(userColor === "red" ? userNftIds : opponentNftIds).length} NFT{(userColor === "red" ? userNftIds : opponentNftIds).length !== 1 ? "s" : ""}</div>
+                          <div style={{ fontSize: 8, color: T.grayD, fontFamily: "'Share Tech Mono', monospace", marginTop: 2 }}>
+                            {userColor === "red" ? `#${userNftIds.join(", #")}` : myRoom.red_player ? `#${opponentNftIds.join(", #")}` : "—"}
+                          </div>
+                        </div>
+
+                        <div style={{ fontSize: 18, color: T.burn, fontWeight: 900, textAlign: "center" }}>VS</div>
+
+                        {/* BLACK side */}
+                        <div style={{ background: T.card, borderRadius: 10, padding: 12, border: `1px solid ${userColor === "black" ? T.accent + "40" : T.border}` }}>
+                          {myRoom.black_player ? (
+                            <>
+                              <div style={{ fontSize: 8, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginBottom: 4, fontWeight: 800 }}>⚫ BLACK {userColor === "black" && <span style={{ color: T.accent }}>· YOU</span>}</div>
+                              <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.white, wordBreak: "break-all" }}>{shortAddr(myRoom.black_player)}</div>
+                              <div style={{ fontSize: 9, color: T.accent, fontFamily: "'Share Tech Mono', monospace", marginTop: 4 }}>{(userColor === "black" ? userNftIds : myRoom.black_nft_ids).length} NFT{(userColor === "black" ? userNftIds : myRoom.black_nft_ids).length !== 1 ? "s" : ""}</div>
+                              <div style={{ fontSize: 8, color: T.grayD, fontFamily: "'Share Tech Mono', monospace", marginTop: 2 }}>#{(userColor === "black" ? userNftIds : myRoom.black_nft_ids).join(", #")}</div>
+                            </>
+                          ) : (
+                            <div style={{ textAlign: "center", padding: "8px 0" }}>
+                              <div style={{ fontSize: 16 }}>⌛</div>
+                              <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginTop: 4 }}>WAITING FOR<br />CHALLENGER</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {myRoom.eth_amount > 0n && (
+                        <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.accent, marginBottom: 10, textAlign: "center" }}>
+                          ⚡ ETH wager: {(Number(myRoom.eth_amount) / 1e18).toFixed(4)} ETH each side
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {myRoom.status === "active" && (
+                          <button
+                            onClick={() => handleSpin(myRoom.id)}
+                            disabled={spinningRoulette}
+                            style={{ flex: 1, padding: "12px 0", background: spinningRoulette ? T.grayK : T.accent, border: "none", borderRadius: 10, color: T.bg, fontSize: 13, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 2, cursor: spinningRoulette ? "not-allowed" : "pointer" }}
+                          >
+                            🎡 SPIN THE WHEEL
+                          </button>
+                        )}
+                        {myRoom.status === "spinning" && (
+                          <div style={{ flex: 1, padding: "12px 0", background: `${T.sweep}10`, border: `1px solid ${T.sweep}30`, borderRadius: 10, color: T.sweep, fontSize: 11, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 1, textAlign: "center" }}>
+                            🔗 CHAINLINK VRF RESOLVING...
+                          </div>
+                        )}
+                        {myRoom.status === "waiting" && myRoom.red_player === addrLower && !myRoom.black_player && (
+                          <button onClick={() => handleCancelRoulette(myRoom.id)} style={{ padding: "10px 16px", background: `${T.burn}15`, border: `1px solid ${T.burn}40`, borderRadius: 10, color: T.burn, fontSize: 10, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>CANCEL</button>
+                        )}
+                        {myRoom.status === "waiting" && myRoom.black_player === addrLower && !myRoom.red_player && (
+                          <button onClick={() => handleCancelRoulette(myRoom.id)} style={{ padding: "10px 16px", background: `${T.burn}15`, border: `1px solid ${T.burn}40`, borderRadius: 10, color: T.burn, fontSize: 10, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>CANCEL</button>
+                        )}
+                        {(myRoom.status === "active" || myRoom.status === "spinning") &&
+                          Date.now() > new Date(myRoom.created_at).getTime() + 24 * 3600 * 1000 && (
+                          <button onClick={() => handleRefundExpiredRoulette(myRoom.id)} style={{ padding: "10px 14px", background: `${T.gold}15`, border: `1px solid ${T.gold}40`, borderRadius: 10, color: T.gold, fontSize: 10, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>⏰ REFUND EXPIRED</button>
+                        )}
+                        <button onClick={loadRouletteRooms} style={{ padding: "10px 14px", background: `${T.accent}10`, border: `1px solid ${T.accent}20`, borderRadius: 10, color: T.accent, fontSize: 10, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>↻</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* ── CREATE ROULETTE ROOM ── */}
+                {!rouletteRooms.find(r => r.red_player === address?.toLowerCase() || r.black_player === address?.toLowerCase()) && (
+                  <div style={PS}>
+                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: T.accent, letterSpacing: 2, marginBottom: 14 }}>CREATE ROULETTE ROOM</h3>
+
+                    {/* Step 1: NFT count */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>HOW MANY NFTs TO WAGER?</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {([1, 2, 3, "custom"] as const).map(v => (
+                          <button key={v} onClick={() => { setRouletteNftCount(v); setRouletteSelectedIds(new Set()); }} style={{ padding: "8px 16px", borderRadius: 8, border: `1px solid ${rouletteNftCount === v ? T.accent : T.border}`, background: rouletteNftCount === v ? `${T.accent}15` : T.card, color: rouletteNftCount === v ? T.accent : T.grayD, fontSize: 11, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>
+                            {v === "custom" ? "CUSTOM" : `${v} NFT`}
+                          </button>
+                        ))}
+                      </div>
+                      {rouletteNftCount === "custom" && (
+                        <input type="number" min={1} max={20} value={rouletteCustomCount} onChange={e => { setRouletteCustomCount(e.target.value); setRouletteSelectedIds(new Set()); }} placeholder="Enter amount..." style={{ ...inputStyle, marginTop: 8, width: 160 }} />
+                      )}
+                    </div>
+
+                    {/* Step 2: choose color */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>YOUR COLOR</div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={() => setRouletteColor("red")} style={{ padding: "10px 24px", borderRadius: 10, border: `1px solid ${rouletteColor === "red" ? "#ef4444" : T.border}`, background: rouletteColor === "red" ? "#ef444415" : T.card, color: rouletteColor === "red" ? "#ef4444" : T.grayD, fontSize: 13, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 1, cursor: "pointer" }}>
+                          🔴 RED
+                        </button>
+                        <button onClick={() => setRouletteColor("black")} style={{ padding: "10px 24px", borderRadius: 10, border: `1px solid ${rouletteColor === "black" ? "#71717a" : T.border}`, background: rouletteColor === "black" ? "#71717a15" : T.card, color: rouletteColor === "black" ? "#a1a1aa" : T.grayD, fontSize: 13, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 1, cursor: "pointer" }}>
+                          ⚫ BLACK
+                        </button>
+                      </div>
+                      <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayK, marginTop: 6 }}>
+                        31 slots · 15 RED · 15 BLACK · 1 GREEN (house) · 5% fee on ETH wins
+                      </div>
+                    </div>
+
+                    {/* Step 3: room name */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
+                        ROOM NAME <span style={{ color: T.grayK }}>(OPTIONAL · MAX 32 CHARS)</span>
+                      </div>
+                      <input type="text" maxLength={32} value={rouletteRoomName} onChange={e => setRouletteRoomName(e.target.value)} placeholder="e.g. 3v3 Roulette" style={inputStyle} />
+                    </div>
+
+                    {/* Step 4: optional ETH wager */}
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
+                        ETH WAGER <span style={{ color: T.grayK }}>(OPTIONAL)</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input type="number" min="0" step="0.001" value={rouletteEthAmount} onChange={e => setRouletteEthAmount(e.target.value)} placeholder="0.00 ETH" style={{ ...inputStyle, width: 160 }} />
+                        <span style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>ETH</span>
+                      </div>
+                      {rouletteEthAmount && parseFloat(rouletteEthAmount) > 0 && (
+                        <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayK, marginTop: 4 }}>
+                          Challenger must match {rouletteEthAmount} ETH · 5% fee on win
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Step 5: select NFTs */}
+                    {resolvedRouletteCount > 0 && (
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, letterSpacing: 1, marginBottom: 8 }}>
+                          SELECT {resolvedRouletteCount} NFT{resolvedRouletteCount > 1 ? "s" : ""} TO WAGER
+                          <span style={{ marginLeft: 8, color: rouletteSelectedIds.size === resolvedRouletteCount ? T.success : T.accent }}>{rouletteSelectedIds.size}/{resolvedRouletteCount} selected</span>
+                        </div>
+                        {ownedNfts.length === 0 ? (
+                          <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>No NFTs found in your wallet.</div>
+                        ) : (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                            {ownedNfts.map(nft => {
+                              const sel = rouletteSelectedIds.has(nft.tokenId);
+                              const locked = rouletteRooms.some(r => [...r.red_nft_ids, ...r.black_nft_ids].includes(nft.tokenId));
+                              return (
+                                <div
+                                  key={nft.tokenId}
+                                  onClick={() => {
+                                    if (locked) return;
+                                    setRouletteSelectedIds(prev => {
+                                      const n = new Set(prev);
+                                      if (n.has(nft.tokenId)) { n.delete(nft.tokenId); return n; }
+                                      if (n.size >= resolvedRouletteCount) return prev;
+                                      n.add(nft.tokenId); return n;
+                                    });
+                                  }}
+                                  style={{ width: 72, borderRadius: 10, overflow: "hidden", border: `2px solid ${locked ? T.grayK : sel ? T.accent : T.border}`, cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.4 : 1, background: sel ? `${T.accent}10` : T.card, flexShrink: 0 }}
+                                >
+                                  {nft.image && <img src={nft.image} alt={`#${nft.tokenId}`} style={{ width: "100%", display: "block" }} />}
+                                  <div style={{ padding: "3px 4px", textAlign: "center", fontSize: 8, fontFamily: "'Share Tech Mono', monospace", color: sel ? T.accent : T.grayD, fontWeight: 700 }}>#{nft.tokenId}</div>
+                                  {locked && <div style={{ padding: "2px 4px", textAlign: "center", fontSize: 7, fontFamily: "'Share Tech Mono', monospace", color: T.burn }}>IN BET</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleCreateRoulette}
+                      disabled={creatingRoulette || rouletteSelectedIds.size !== resolvedRouletteCount || resolvedRouletteCount === 0}
+                      style={{ width: "100%", padding: "12px 0", background: (creatingRoulette || rouletteSelectedIds.size !== resolvedRouletteCount || resolvedRouletteCount === 0) ? T.grayK : T.accent, border: "none", borderRadius: 10, color: T.bg, fontSize: 12, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", letterSpacing: 2, cursor: (creatingRoulette || rouletteSelectedIds.size !== resolvedRouletteCount || resolvedRouletteCount === 0) ? "not-allowed" : "pointer" }}
+                    >
+                      {creatingRoulette ? "CREATING..." : "🎡 CREATE ROULETTE ROOM"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── OPEN ROULETTE LOBBIES ── */}
+                <div style={PS}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: T.white, letterSpacing: 2 }}>OPEN LOBBIES</h3>
+                    <button onClick={loadRouletteRooms} style={{ background: `${T.accent}10`, border: `1px solid ${T.accent}20`, borderRadius: 6, padding: "4px 10px", color: T.accent, fontSize: 9, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>↻ REFRESH</button>
+                  </div>
+
+                  {rouletteRooms.filter(r => r.status === "waiting" && r.red_player !== address?.toLowerCase() && r.black_player !== address?.toLowerCase()).length === 0 ? (
+                    <div style={{ textAlign: "center", padding: "30px 0", color: T.grayD, fontSize: 11, fontFamily: "'Share Tech Mono', monospace" }}>No open rooms right now. Create one above!</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {rouletteRooms
+                        .filter(r => r.status === "waiting" && r.red_player !== address?.toLowerCase() && r.black_player !== address?.toLowerCase())
+                        .map(room => {
+                          const creatorColor = room.red_player !== ZERO_ADDRESS && !room.black_player ? "red" : "black";
+                          const joinerColor = creatorColor === "red" ? "black" : "red";
+                          const creatorAddr = creatorColor === "red" ? room.red_player : (room.black_player ?? "");
+                          const creatorNftIds = creatorColor === "red" ? room.red_nft_ids : room.black_nft_ids;
+                          return (
+                            <div key={room.id} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 12, padding: 14 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+                                <div>
+                                  <div style={{ fontSize: 11, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", color: T.white }}>{room.name || shortAddr(creatorAddr)}</div>
+                                  {room.name && <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>{shortAddr(creatorAddr)}</div>}
+                                  <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginTop: 2 }}>
+                                    wagering {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""} · #{creatorNftIds.join(", #")}
+                                    {room.eth_amount > 0n && <span style={{ marginLeft: 6, color: T.accent }}>+ {(Number(room.eth_amount) / 1e18).toFixed(4)} ETH</span>}
+                                  </div>
+                                </div>
+                                <div style={{ textAlign: "right" }}>
+                                  <div style={{ fontSize: 10, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: creatorColor === "red" ? "#ef4444" : "#a1a1aa" }}>
+                                    {creatorColor === "red" ? "🔴 RED" : "⚫ BLACK"}
+                                  </div>
+                                  <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.accent, marginTop: 2 }}>
+                                    You play: <span style={{ color: joinerColor === "red" ? "#ef4444" : "#a1a1aa" }}>{joinerColor === "red" ? "🔴 RED" : "⚫ BLACK"}</span>
+                                  </div>
+                                  <div style={{ fontSize: 8, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginTop: 2 }}>{new Date(room.created_at).toLocaleTimeString()}</div>
+                                </div>
+                              </div>
+
+                              {/* Join UI */}
+                              {rouletteJoinRoomId === room.id ? (
+                                <div>
+                                  <div style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginBottom: 8 }}>
+                                    SELECT {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""} TO MATCH
+                                    <span style={{ marginLeft: 8, color: rouletteJoinSelectedIds.size === room.nft_count ? T.success : T.accent }}>{rouletteJoinSelectedIds.size}/{room.nft_count}</span>
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxHeight: 200, overflowY: "auto", marginBottom: 10 }}>
+                                    {ownedNfts.map(nft => {
+                                      const sel = rouletteJoinSelectedIds.has(nft.tokenId);
+                                      const locked = rouletteRooms.some(r => [...r.red_nft_ids, ...r.black_nft_ids].includes(nft.tokenId));
+                                      return (
+                                        <div
+                                          key={nft.tokenId}
+                                          onClick={() => {
+                                            if (locked) return;
+                                            setRouletteJoinSelectedIds(prev => {
+                                              const n = new Set(prev);
+                                              if (n.has(nft.tokenId)) { n.delete(nft.tokenId); return n; }
+                                              if (n.size >= room.nft_count) return prev;
+                                              n.add(nft.tokenId); return n;
+                                            });
+                                          }}
+                                          style={{ width: 64, borderRadius: 8, overflow: "hidden", border: `2px solid ${locked ? T.grayK : sel ? T.accent : T.border}`, cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.4 : 1, background: sel ? `${T.accent}10` : T.bgS, flexShrink: 0 }}
+                                        >
+                                          {nft.image && <img src={nft.image} alt={`#${nft.tokenId}`} style={{ width: "100%", display: "block" }} />}
+                                          <div style={{ padding: "2px 3px", textAlign: "center", fontSize: 7, fontFamily: "'Share Tech Mono', monospace", color: sel ? T.accent : T.grayD, fontWeight: 700 }}>#{nft.tokenId}</div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  <div style={{ display: "flex", gap: 8 }}>
+                                    <button
+                                      onClick={() => handleJoinRoulette(room.id)}
+                                      disabled={joiningRoulette || rouletteJoinSelectedIds.size !== room.nft_count}
+                                      style={{ flex: 1, padding: "10px 0", background: (joiningRoulette || rouletteJoinSelectedIds.size !== room.nft_count) ? T.grayK : T.accent, border: "none", borderRadius: 8, color: T.bg, fontSize: 11, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", cursor: (joiningRoulette || rouletteJoinSelectedIds.size !== room.nft_count) ? "not-allowed" : "pointer" }}
+                                    >
+                                      {joiningRoulette ? "JOINING..." : `CONFIRM JOIN${room.eth_amount > 0n ? ` · ${(Number(room.eth_amount) / 1e18).toFixed(4)} ETH` : ""}`}
+                                    </button>
+                                    <button onClick={() => { setRouletteJoinRoomId(null); setRouletteJoinSelectedIds(new Set()); }} style={{ padding: "10px 14px", background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, color: T.grayD, fontSize: 10, fontFamily: "'Share Tech Mono', monospace", cursor: "pointer" }}>CANCEL</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => { setRouletteJoinRoomId(room.id); setRouletteJoinSelectedIds(new Set()); }}
+                                  disabled={!!rouletteRooms.find(r => r.red_player === address?.toLowerCase() || r.black_player === address?.toLowerCase())}
+                                  style={{ width: "100%", padding: "9px 0", background: rouletteRooms.find(r => r.red_player === address?.toLowerCase() || r.black_player === address?.toLowerCase()) ? T.grayK : `${T.sweep}15`, border: `1px solid ${T.sweep}30`, borderRadius: 8, color: T.sweep, fontSize: 11, fontWeight: 800, fontFamily: "'Share Tech Mono', monospace", cursor: rouletteRooms.find(r => r.red_player === address?.toLowerCase() || r.black_player === address?.toLowerCase()) ? "not-allowed" : "pointer" }}
+                                >
+                                  ⚡ JOIN AS {joinerColor.toUpperCase()} · MATCH {room.nft_count} NFT{room.nft_count > 1 ? "s" : ""}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── MY RECENT ROULETTE RESULTS ── */}
+                {myCompletedRoulettes.length > 0 && (
+                  <div style={PS}>
+                    <h3 style={{ fontSize: 12, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: T.white, letterSpacing: 2, marginBottom: 12 }}>RECENT RESULTS</h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {myCompletedRoulettes.map(r => {
+                        const iWon = r.winner_wallet?.toLowerCase() === address?.toLowerCase();
+                        const isGreen = r.spin_result === "green";
+                        const slotColor = r.spin_result === "red" ? "#ef4444" : r.spin_result === "black" ? "#a1a1aa" : "#4ade80";
+                        return (
+                          <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: isGreen ? `${T.gold}08` : iWon ? `${T.success}08` : `${T.burn}08`, border: `1px solid ${isGreen ? T.gold : iWon ? T.success : T.burn}30`, borderRadius: 10, flexWrap: "wrap", gap: 6 }}>
+                            <div>
+                              <span style={{ fontSize: 11, fontWeight: 900, fontFamily: "'Share Tech Mono', monospace", color: isGreen ? T.gold : iWon ? T.success : T.burn }}>
+                                {isGreen ? "🟢 HOUSE WINS" : iWon ? "🏆 WIN" : "💀 LOSS"}
+                              </span>
+                              {r.winner_wallet && <span style={{ fontSize: 9, fontFamily: "'Share Tech Mono', monospace", color: T.grayD, marginLeft: 8 }}>winner: {shortAddr(r.winner_wallet)}</span>}
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 10, fontFamily: "'Share Tech Mono', monospace", color: slotColor }}>
+                                SLOT #{r.spin_slot} · {r.spin_result?.toUpperCase()} · {r.nft_count * 2} NFTs
+                              </div>
+                              <div style={{ fontSize: 8, fontFamily: "'Share Tech Mono', monospace", color: T.grayD }}>{new Date(r.created_at).toLocaleString()}</div>
                             </div>
                           </div>
                         );
