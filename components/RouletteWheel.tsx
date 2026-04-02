@@ -56,9 +56,13 @@ interface RouletteWheelProps {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export function RouletteWheel({ spinning, targetSlot, onDone }: RouletteWheelProps) {
-  const stripRef = useRef<HTMLDivElement>(null);
-  const posRef   = useRef(0);   // current translateX in px
-  const rafRef   = useRef<number>(0);
+  const stripRef  = useRef<HTMLDivElement>(null);
+  const posRef    = useRef(0);   // current translateX in px
+  const rafRef    = useRef<number>(0);
+  // Keep onDone in a ref so Phase 2 effect doesn't re-run when the parent
+  // re-renders with a new inline function reference.
+  const onDoneRef = useRef(onDone);
+  useEffect(() => { onDoneRef.current = onDone; });
 
   // ── Phase 1: fast spin via RAF while waiting for VRF ──────────────────────
   useEffect(() => {
@@ -129,11 +133,13 @@ export function RouletteWheel({ spinning, targetSlot, onDone }: RouletteWheelPro
       const color: SpinResult["color"] =
         targetSlot === 0 ? "green" : targetSlot <= 15 ? "red" : "black";
 
-      onDone?.({ slot: targetSlot, color });
+      onDoneRef.current?.({ slot: targetSlot, color });
     }, stopMs);
 
     return () => clearTimeout(timer);
-  }, [spinning, targetSlot, onDone]);
+  // onDone intentionally omitted — stored in onDoneRef to avoid re-running Phase 2
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spinning, targetSlot]);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
   const containerW = VISIBLE * TILE_W;
